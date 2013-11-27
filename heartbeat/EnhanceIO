@@ -1,0 +1,367 @@
+#!/bin/sh
+#
+# EnhanceIO
+#
+# Description: Resource Agent for highly available EnhanceIO caches.
+#              Requires installed EnhanceIO kernel module and utilities.
+#
+# Authors:     Andreas Kurz
+#
+# Support:     linux-ha@lists.linux-ha.org
+# License:     GNU General Public License (GPL)
+#
+# (c) 2013     hastexo Professional Services GmbH
+#
+# This resource agent is derived from the flashcache resource
+# agent, which itself is made available to the public under the
+# following copyright:
+# 
+# (c) 2011     Florian Haas
+#
+# See usage() function below for more details ...
+#
+# OCF instance parameters:
+#   OCF_RESKEY_src_disk
+#   OCF_RESKEY_ssd_disk
+#   OCF_RESKEY_cache_name
+#   OCF_RESKEY_policy
+#   OCF_RESKEY_cache_mode
+#   OCF_RESKEY_block_size
+#######################################################################
+# Initialization:
+
+: ${OCF_FUNCTIONS_DIR=${OCF_ROOT}/lib/heartbeat}
+. ${OCF_FUNCTIONS_DIR}/ocf-shellfuncs
+
+# Defaults
+OCF_RESKEY_policy_default="fifo"
+OCF_RESKEY_cache_mode_default="wt"
+OCF_RESKEY_block_size_default="4096"
+
+: ${OCF_RESKEY_policy=${OCF_RESKEY_policy_default}}
+: ${OCF_RESKEY_cache_mode=${OCF_RESKEY_cache_mode_default}}
+: ${OCF_RESKEY_block_size=${OCF_RESKEY_block_size_default}}
+
+enhanceio_usage() {
+  echo "usage: $0 {start|stop|status|monitor|meta-data|validate-all}"
+}
+
+enhanceio_meta_data() {
+    cat <<EOF
+<?xml version="1.0"?>
+<!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
+<resource-agent name="EnhanceIO" version="0.1">
+  <version>0.1</version>
+  <longdesc lang="en">
+This resource agent manages an EnhanceIO cache device, loading any existing
+cache from the flash device on startup and flushing the cache to the
+disk on graceful shutdown.
+  </longdesc>
+  <shortdesc lang="en">Manages an EnhanceIO cache</shortdesc>
+  <parameters>
+    <parameter name="src_device" unique="1" required="1">
+      <longdesc lang="en">
+      The name of the source device. This is typically a
+      comparatively high-latency but high-capacity block device,
+      such as a rotational disk.
+      </longdesc>
+      <shortdesc lang="en">Source device name</shortdesc>
+      <content type="string"/>
+    </parameter>
+    <parameter name="ssd_device" unique="1" required="1">
+      <longdesc lang="en">
+      The SSD cache device to be used by EnhanceIO.
+      </longdesc>
+      <shortdesc lang="en">SSD device</shortdesc>
+      <content type="string"/>
+    </parameter>
+    <parameter name="cache_name" unique="1" required="1">
+      <longdesc lang="en">
+      The cache device to be created by EnhanceIO.
+      </longdesc>
+      <shortdesc lang="en">Cache device name</shortdesc>
+      <content type="string"/>
+    </parameter>
+    <parameter name="policy" unique="0" required="0">
+      <longdesc lang="en">
+      Cache block replacement policy. Policies are:
+      lru, fifo(default), rand(random).
+      </longdesc>
+      <shortdesc lang="en">Cache block replacement policy</shortdesc>
+      <content type="string" default="${OCF_RESKEY_policy_default}"/>
+    </parameter>
+    <parameter name="cache_mode" unique="0" required="0">
+      <longdesc lang="en">
+      Specifies  the  caching  mode. Supported caching modes are:
+      ro(Read-Only), wt(default: Write-Through), wb(Write-Back).
+      </longdesc>
+      <shortdesc lang="en">The caching mode</shortdesc>
+      <content type="string" default="${OCF_RESKEY_cache_mode_default}"/>
+    </parameter>
+    <parameter name="block_size" unique="0" required="0">
+      <longdesc lang="en">
+      Specifies the block size of each single cache entry.
+      Block sizes are: 2048, 4096(default), 8192.
+      </longdesc>
+      <shortdesc lang="en">Cache entry block size</shortdesc>
+      <content type="integer" default="${OCF_RESKEY_block_size_default}"/>
+    </parameter>
+  </parameters>
+  <actions>
+    <action name="start"        timeout="60" />
+    <action name="stop"         timeout="180" />
+    <action name="reload"       timeout="60" />
+    <action name="monitor"      timeout="20" />
+    <action name="meta-data"    timeout="5" />
+    <action name="validate-all" timeout="20" />
+  </actions>
+</resource-agent>
+EOF
+}
+
+enhanceio_start() {
+    local params
+
+    # exit immediately if configuration is not valid
+    enhanceio_validate_all || exit $?
+
+    # if resource is already running, bail out early
+    if enhanceio_monitor; then
+        ocf_log info "Resource is already running"
+        return $OCF_SUCCESS
+    fi
+
+    # If the file exists here, but enhanceio_monitor has determined
+    # the resource isn't already running, then the file probably is
+    # owned by something else. Bail out to avoid breaking things.
+    if [ -e /proc/enhanceio/${OCF_RESKEY_cache_name} ]; then
+	ocf_log err "Existing file /proc/enhanceio/${OCF_RESKEY_name} would be overwritten by ${OCF_RESOURCE_INSTANCE}. Bailing out."
+	exit $OCF_ERR_INSTALLED
+    fi
+
+    if [ ! -e /proc/enhanceio/version ]; then
+	ocf_log debug "Enhanceio support not loaded, loading module"
+	ocf_run modprobe -v enhanceio || exit $OCF_ERR_INSTALLED
+    fi
+
+    ocf_log debug "Enhanceio module information obtained from kernel: `cat /proc/enhanceio/version`"
+
+    # Reload is possible on "policy" or "cache_mode"
+    # changes.
+    case $__OCF_ACTION in
+        start)
+            params="create -d ${OCF_RESKEY_src_device} -s ${OCF_RESKEY_ssd_device} -b ${OCF_RESKEY_block_size} -p ${OCF_RESKEY_policy} -m ${OCF_RESKEY_cache_mode}"
+            ;;
+        reload)
+            params="edit -p ${OCF_RESKEY_policy} -m ${OCF_RESKEY_cache_mode}"
+            ;;
+    esac
+
+    # actually start up the resource here (make sure to immediately
+    # exit with an $OCF_ERR_ error code if anything goes seriously
+    # wrong)
+    ocf_run eio_cli $params -c ${OCF_RESKEY_cache_name} || exit $OCF_ERR_GENERIC
+
+    # After the resource nhas been started, check whether it started up
+    # correctly. If the resource starts asynchronously, the agent may
+    # spin on the monitor function here -- if the resource does not
+    # start up within the defined timeout, the cluster manager will
+    # consider the start action failed
+    while ! enhanceio_monitor; do
+        ocf_log debug "Resource has not started yet, waiting"
+        sleep 1
+    done
+
+    # only return $OCF_SUCCESS if _everything_ succeeded as expected
+    return $OCF_SUCCESS
+}
+
+enhanceio_stop() {
+    local rc
+    local msg
+    local ignore
+
+    # exit immediately if configuration is not valid
+    enhanceio_validate_all || exit $?
+
+    enhanceio_monitor
+    rc=$?
+    case "$rc" in
+        "$OCF_SUCCESS")
+            # Currently running. Normal, expected behavior.
+            ocf_log debug "Resource is currently running"
+            ;;
+        "$OCF_NOT_RUNNING")
+            # Currently not running. Nothing to do.
+            ocf_log info "Resource is already stopped"
+            return $OCF_SUCCESS
+            ;;
+    esac
+
+    # actually shut down the resource here (make sure to immediately
+    # exit with an $OCF_ERR_ error code if anything goes seriously
+    # wrong)
+    msg=$(ocf_run eio_cli delete -c ${OCF_RESKEY_cache_name} 2>&1)
+    rc=$?
+    # For unsupported devices eio_cli fails to create an
+    # udev-rule file on start. On stop it exits with
+    # rc=3 if it is unable to delete this missing file
+    # Ignore this error here, as the cache is cluster managed.
+    echo "$msg" | grep -q -s 'Unable to delete rule file(please remove it manually)'
+    ignore=$?
+    if [ "$rc" -eq 3 -a "$ignore" -eq 0 ]; then
+        :
+    elif [ "$rc" -ne 0 ]; then
+        exit $OCF_ERR_GENERIC
+    fi 
+
+    # After the resource has been stopped, check whether it shut down
+    # correctly. If the resource stops asynchronously, the agent may
+    # spin on the monitor function here -- if the resource does not
+    # shut down within the defined timeout, the cluster manager will
+    # consider the stop action failed
+    while enhanceio_monitor; do
+        ocf_log debug "Resource has not stopped yet, waiting"
+        sleep 1
+    done
+
+    # only return $OCF_SUCCESS if _everything_ succeeded as expected
+    return $OCF_SUCCESS
+
+}
+
+enhanceio_monitor() {
+    local rc
+    local key
+    local val
+    local nr
+
+    # exit immediately if configuration is not valid
+    enhanceio_validate_all || exit $?
+
+    # First, see if the cache is configured 
+    config=/proc/enhanceio/${OCF_RESKEY_cache_name}/config
+    if [ -e ${config} ]; then
+        # OK, let's check if it has the correct devices and block size configured  
+        # In /proc: "src_device" maps to "src_name"
+        #          "ssd_device" maps to "ssd_name"
+	for key in src_name ssd_name block_size; do
+            case $key in
+                src_name)   val="$OCF_RESKEY_src_device";;
+                ssd_name)   val="$OCF_RESKEY_ssd_device";;
+                block_size) val="$OCF_RESKEY_block_size";;
+            esac
+	    grep -E -q "^${key}[[:space:]]+${val}\$" $config
+            if [ $? -ne 0 ]; then
+                ocf_log err "Existing config ${config} would be overwritten by ${OCF_RESOURCE_INSTANCE}. Bailing out."
+                exit $OCF_ERR_INSTALLED
+	    fi
+        done
+        # Let's also check policy and cache_mode
+        # from the source:
+        # CACHE_MODE_WB 1
+        # CACHE_MODE_RO 2
+        # CACHE_MODE_WT 3
+        # CACHE_REPL_FIFO 1
+        # CACHE_REPL_LRU 2
+        # CACHE_REPL_RANDOM 3
+        # In /proc: "policy" maps to "eviction"
+        #           "cache_mode" maps to "mode"
+        for key in eviction mode; do
+            case $key in
+                eviction) val="$OCF_RESKEY_policy";;
+                mode)     val="$OCF_RESKEY_cache_mode";;
+            esac
+            case $val in
+                wb|fifo) nr="1" ;;
+                ro|lru)  nr="2" ;;
+                wt|rand) nr="3" ;;
+            esac
+            grep -E -q "^${key}[[:space:]]+${nr}$" $config
+            if [ $? -ne 0 ]; then
+                ocf_log err "Existing config ${config} would be overwritten by ${OCF_RESOURCE_INSTANCE}. Bailing out."
+                exit $OCF_ERR_INSTALLED
+	    fi
+        done
+        # Great!
+        return $OCF_RUNNING
+    fi
+
+    return $OCF_NOT_RUNNING
+}
+
+enhanceio_validate_all() {
+    # Check required parameters
+    if [ -z "${OCF_RESKEY_src_device}" ]; then
+	ocf_log err "Required parameter \"src_device\" not configured!"
+	exit $OCF_ERR_CONFIGURED
+    fi
+    if [ -z "${OCF_RESKEY_ssd_device}" ]; then
+	ocf_log err "Required parameter \"ssd_device\" not configured!"
+	exit $OCF_ERR_CONFIGURED
+    fi
+    if [ -z "${OCF_RESKEY_cache_name}" ]; then
+	ocf_log err "Required parameter \"cache_name\" not configured!"
+	exit $OCF_ERR_CONFIGURED
+    fi
+
+    # Check valid options
+    case ${OCF_RESKEY_cache_mode} in 
+        wt|ro|wb) ;;
+        *) exit $OCF_ERR_CONFIGURED;;
+    esac
+    case ${OCF_RESKEY_policy} in 
+        fifo|lru|rand) ;;
+        *) exit $OCF_ERR_CONFIGURED;;
+    esac
+    case ${OCF_RESKEY_block_size} in 
+        2048|4096|8192) ;;
+        *) exit $OCF_ERR_CONFIGURED;;
+    esac
+
+    # Test for required binaries
+    check_binary eio_cli
+    check_binary grep
+
+    if ! ocf_is_probe; then
+	for dev in ${OCF_RESKEY_src_device} ${OCF_RESKEY_ssd_device}; do
+	    if [ ! -b ${dev} ]; then
+		ocf_log err "${dev} does not exist or is not a block device!"
+		exit $OCF_ERR_INSTALLED
+	    fi
+	done
+    fi
+
+    return $OCF_SUCCESS
+}
+
+# Make sure meta-data and usage always succeed
+case $__OCF_ACTION in
+meta-data)      enhanceio_meta_data
+                exit $OCF_SUCCESS
+                ;;
+usage|help)     enhanceio_usage
+                exit $OCF_SUCCESS
+                ;;
+esac
+
+# Anything other than meta-data and usage must pass validation
+enhanceio_validate_all || exit $?
+
+# Translate each action into the appropriate function call
+case $__OCF_ACTION in
+start)          enhanceio_start;;
+stop)           enhanceio_stop;;
+status|monitor) enhanceio_monitor;;
+reload)         ocf_log info "Reloading..."
+                enhanceio_start
+                ;;
+validate-all)   ;;
+*)              enhanceio_usage
+                exit $OCF_ERR_UNIMPLEMENTED
+                ;;
+esac
+rc=$?
+
+ocf_log debug "${OCF_RESOURCE_INSTANCE} $__OCF_ACTION returned $rc"
+exit $rc
