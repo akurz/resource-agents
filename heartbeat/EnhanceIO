@@ -201,17 +201,14 @@ enhanceio_stop() {
     # actually shut down the resource here (make sure to immediately
     # exit with an $OCF_ERR_ error code if anything goes seriously
     # wrong)
-    msg=$(ocf_run eio_cli delete -c ${OCF_RESKEY_cache_name} 2>&1)
+    ocf_run eio_cli delete -c ${OCF_RESKEY_cache_name}
     rc=$?
     # For unsupported devices eio_cli fails to create an
     # udev-rule file on start. On stop it exits with
     # rc=3 if it is unable to delete this missing file
-    # Ignore this error here, as the cache is cluster managed.
-    echo "$msg" | grep -q -s 'Unable to delete rule file(please remove it manually)'
-    ignore=$?
-    if [ "$rc" -eq 3 -a "$ignore" -eq 0 ]; then
-        :
-    elif [ "$rc" -ne 0 ]; then
+    # but in fact it's stopped. Also other cases in src
+    # for stop (delete) errors don't look critical.
+    if [ "$rc" -ne 0 -a "$rc" -ne 3 ]; then
         exit $OCF_ERR_GENERIC
     fi 
 
