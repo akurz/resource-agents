@@ -50,7 +50,7 @@ enhanceio_meta_data() {
     cat <<EOF
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="EnhanceIO" version="0.1">
+<resource-agent name="EnhanceIO" version="0.2">
   <version>0.1</version>
   <longdesc lang="en">
 This resource agent manages an EnhanceIO cache device, loading any existing
@@ -201,6 +201,20 @@ enhanceio_stop() {
     # actually shut down the resource here (make sure to immediately
     # exit with an $OCF_ERR_ error code if anything goes seriously
     # wrong)
+    # 1. switch into ro mode, no further changes on the cache
+    #    are possible
+    ocf_log debug "Switching cache into read only mode"
+    ocf_run eio_cli edit -m ro -c ${OCF_RESKEY_cache_name}
+    # 2. wait for data in cache to be written to slower disk
+    ocf_log debug "Waiting for cached data to be flushed to disk"
+    while true; do
+        grep -E -q "^nr_dirty[[:space:]]+0\$" \
+        /proc/enhanceio/${OCF_RESKEY_cache_name}/stats && break
+        ocf_log debug "Still waiting for cached data to drain: $(grep nr_dirty /proc/enhanceio/${OCF_RESKEY_cache_name}/stats)"
+        sleep 1
+    done
+    ocf_log debug "Deleting the cache device"
+    # 3. data is now consistent also for wb mode - delete the cache device
     ocf_run eio_cli delete -c ${OCF_RESKEY_cache_name}
     rc=$?
     # For unsupported devices eio_cli fails to create an
