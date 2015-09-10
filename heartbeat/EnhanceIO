@@ -10,6 +10,7 @@
 # Support:     linux-ha@lists.linux-ha.org
 # License:     GNU General Public License (GPL)
 #
+# (c) 2015     Andreas Kurz <andreas.kurz AT gmail DOT com>
 # (c) 2013     hastexo Professional Services GmbH
 #
 # This resource agent is derived from the flashcache resource
@@ -50,8 +51,8 @@ enhanceio_meta_data() {
     cat <<EOF
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="EnhanceIO" version="0.2">
-  <version>0.1</version>
+<resource-agent name="EnhanceIO" version="0.3">
+  <version>0.3</version>
   <longdesc lang="en">
 This resource agent manages an EnhanceIO cache device, loading any existing
 cache from the flash device on startup and flushing the cache to the
@@ -122,9 +123,6 @@ EOF
 enhanceio_start() {
     local params
 
-    # exit immediately if configuration is not valid
-    enhanceio_validate_all || exit $?
-
     # if resource is already running, bail out early
     if enhanceio_monitor; then
         ocf_log info "Resource is already running"
@@ -180,9 +178,6 @@ enhanceio_stop() {
     local rc
     local msg
     local ignore
-
-    # exit immediately if configuration is not valid
-    enhanceio_validate_all || exit $?
 
     enhanceio_monitor
     rc=$?
@@ -243,12 +238,22 @@ enhanceio_stop() {
 
 enhanceio_monitor() {
     local rc
+    local dev
     local key
     local val
     local nr
 
-    # exit immediately if configuration is not valid
-    enhanceio_validate_all || exit $?
+    # No devices, assume the enhanceio cache is not running
+    # - if no configuration is present. Give out some warnings,
+    # let the agent cleanup.
+    for dev in ${OCF_RESKEY_src_device} ${OCF_RESKEY_ssd_device}; do
+        if [ ! -b ${dev} ]; then
+            ocf_log warn "${dev} does not exist or is not a block device!"
+            if [ -e ${config} ]; then
+                ocf_log warn "${dev} missing or not a block device but there is an EnhanceIO config - try to cleanup!"
+            fi
+        fi
+    done
 
     # First, see if the cache is configured 
     config=/proc/enhanceio/${OCF_RESKEY_cache_name}/config
@@ -334,7 +339,9 @@ enhanceio_validate_all() {
     check_binary eio_cli
     check_binary grep
 
-    if ! ocf_is_probe; then
+    # Don't validate devices on stop. At least try to
+    # stop any remains.
+    if ! ocf_is_probe && [ "$__OCF_ACTION" != "stop" ]; then
 	for dev in ${OCF_RESKEY_src_device} ${OCF_RESKEY_ssd_device}; do
 	    if [ ! -b ${dev} ]; then
 		ocf_log err "${dev} does not exist or is not a block device!"
