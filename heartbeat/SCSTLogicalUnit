@@ -444,7 +444,7 @@ update_master_score() {
         awk '{sum += $1} END {print sum}')
 
     # We have an array with all TPGs, the left most
-    # one receeives the highest score. TPGs must be named
+    # one receives the highest score. TPGs must be named
     # like the node names in Pacemaker.
     score=$(( ( ${#tpgs[@]} - $index ) * 1000 ));
 
@@ -782,7 +782,7 @@ SCSTLogicalUnit_start() {
 
                 # Sort the targets in local_targets (like the TPGs) so we can
                 # apply "rel_tgt_id"s in a consistent way.
-                declare -a local_targets=( $(for target in $(${CRM_ATTR_GET_TGT} ${tpg}); do echo ${target};done | sort -bdf) )
+                declare -a local_targets=( $(for target in $(${CRM_ATTR_GET_TGT} ${tpg} 2>/dev/null); do echo ${target};done | sort -bdf) )
                 for target in "${local_targets[@]}"; do
                     # We need a unique rel_tgt_id for every port in the TPG,
                     # also for multiple ports per node.
