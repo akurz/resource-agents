@@ -605,13 +605,18 @@ SCSTLogicalUnit_acls() {
         # remove empty (or only exporting lun 0) ini_groups
         for initiator in $(find ${FABRIC_BASE}/${target}/ini_groups/ -mindepth 1 -maxdepth 1 -type d) ; do
             if [ $(find ${initiator}/luns -mindepth 1 -maxdepth 1 -type d ! -name '0' | wc -l) -eq 0 ] ; then
-                # Forcefully close all sessions.
-                # When using iSCSI MPIO, several sessions per initiator can be available.
-                for session in $(ls -1d ${FABRIC_BASE}/${target}/sessions/${initiator##*/} \
-                                        ${FABRIC_BASE}/${target}/sessions/${initiator##*/}_* 2>/dev/null) ; do
-                    scst_sysfs_write "1" "${session}/force_close" && \
-                    ocf_log warn "Forcefully closed session from initiator ${initiator##*/}."
-                done
+                # Loop until all connections have been closed
+                while [ -d ${FABRIC_BASE}/${target}/sessions/${initiator##*/} ]; do
+		    # Forcefully close all sessions - this is async
+		    # When using iSCSI MPIO, several sessions per initiator can be available.
+		    for session in $(ls -1d ${FABRIC_BASE}/${target}/sessions/${initiator##*/} \
+				   ${FABRIC_BASE}/${target}/sessions/${initiator##*/}_* 2>/dev/null) ; do
+			scst_sysfs_write "1" "${session}/force_close" && \
+			ocf_log warn "Forcefully closed session from initiator ${initiator##*/}."
+		    done
+                    # Give it some time to close
+                    sleep 0.$(ocf_maybe_radom)
+		done
                 # Delete the ini_group
                 scst_sysfs_write "del ${initiator##*/}" ${FABRIC_BASE}/${target}/ini_groups/mgmt || {
                      ocf_log err "Unable to delete initiator group ${initiator##*/} from target ${target}.";
@@ -1136,12 +1141,12 @@ SCSTLogicalUnit_validate() {
 	defvar=OCF_RESKEY_${var}_default
 	if [ -n "${!envar}" ]; then
 	    if  [[ "${!envar}" != "${!defvar}" ]];then
-	        case "$__OCF_ACTION" in
+		case "$__OCF_ACTION" in
                     start|validate-all)
                       ocf_log warn "Configuration parameter \"${var}\"" \
                        "is not supported by SCST's ${OCF_RESKEY_fabric} fabric" \
                        "and will be ignored." ;;
-	        esac
+		esac
 	    fi
 	fi
     done
