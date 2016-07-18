@@ -119,6 +119,14 @@ The routing table to be configured for the route.
 <content type="string" default="" />
 </parameter>
 
+<parameter name="metric" unique="0">
+<longdesc lang="en">
+The metric of the route.
+</longdesc>
+<shortdesc lang="en">Route metric</shortdesc>
+<content type="integer" default="" />
+</parameter>
+
 </parameters>
 
 <actions>
@@ -150,6 +158,9 @@ create_route_spec() {
     fi
     if [ -n "${OCF_RESKEY_table}" ]; then
 	route_spec="${route_spec} table ${OCF_RESKEY_table}"
+    fi
+    if [ -n "${OCF_RESKEY_metric}" -a ${__OCF_ACTION} = "start" ]; then
+       route_spec="${route_spec} metric ${OCF_RESKEY_metric}"
     fi
     echo "$route_spec"
 }
