@@ -46,7 +46,8 @@ Manages NFS exports
 <parameter name="clientspec" unique="0" required="1">
 <longdesc lang="en">
 The client specification allowing remote machines to mount the directory
-(or directories) over NFS.
+(or directories) over NFS. Multiple clients are separated by white
+space.
 </longdesc>
 <shortdesc lang="en">
 Client ACL.
@@ -192,7 +193,7 @@ forall() {
 	local func=$1
 	shift 1
 	local fast_exit=""
-	local dir rc=0
+	local dir client rc=0
 	if [ "$2" = fast_exit ]; then
 		fast_exit=1
 		shift 1
@@ -245,10 +246,14 @@ format_exports() {
 }
 is_exported() {
 	local dir=$1
-	local spec=$2
-	local rc
-	format_exports | grep -q -x -F "$dir $spec"
-	rc=$?
+	local spec="$2"
+	local rc client
+	for client in $spec; do
+		format_exports | grep -q -x -F "$dir $client"
+		rc=$?
+		# stop on first not-found export
+		[ $rc -eq 0 ] || break
+	done
 	if [ $rc -ne 0 -a "$spec" = "*" ]; then
 		# on some platforms, exportfs may print
 		# "<world>" instead of "*"
@@ -259,7 +264,7 @@ is_exported() {
 	if [ $rc -ne 0 -a "$__OCF_ACTION" = "monitor" ]; then
 		local sev="info"
 		ocf_is_probe || sev="err"
-		ocf_log $sev "$dir not exported to $spec (stopped)."
+		ocf_log $sev "$dir not exported to $client (stopped)."
 	fi
 	return $rc
 }
@@ -282,8 +287,9 @@ exportfs_monitor ()
 
 export_one() {
 	local dir=$1
-	local opts sep
+	local opts sep client
 	sep=""
+
 	if [ -n "$OCF_RESKEY_options" ]; then
 		opts="$OCF_RESKEY_options"
 		sep=","
@@ -299,11 +305,13 @@ export_one() {
 
 	# if any of directories fails to export we can exit
 	# immediately
-	ocf_run exportfs -v $opts "${OCF_RESKEY_clientspec}:$dir"
-	if [ $? -ne 0 ]; then
-		ocf_exit_reason "exportfs failed - exportfs -v $opts ${OCF_RESKEY_clientspec}:$dir"
-		exit $OCF_ERR_GENERIC
-	fi
+	for client in $OCF_RESKEY_clientspec; do
+		ocf_run exportfs -v $opts "${client}:$dir"
+		if [ $? -ne 0 ]; then
+			ocf_exit_reason "exportfs failed - exportfs -v $opts ${client}:$dir"
+			exit $OCF_ERR_GENERIC
+		fi
+	done
 
 	ocf_log info "directory $dir exported"
 	return $OCF_SUCCESS
@@ -365,7 +373,10 @@ cleanup_export_cache() {
 }
 unexport_one() {
 	local dir=$1
-	ocf_run exportfs -v -u ${OCF_RESKEY_clientspec}:$dir
+	local client
+	for client in $OCF_RESKEY_clientspec; do
+		ocf_run exportfs -v -u ${client}:$dir
+	done
 }
 exportfs_stop ()
 {
