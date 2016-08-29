@@ -82,9 +82,12 @@ fi
 # end of debugging aid
 
 # For convenience
+HOSTNAME=$(crm_node -n)
 SCST_BASE="/sys/kernel/scst_tgt"
 FABRIC_BASE="${SCST_BASE}/targets/${OCF_RESKEY_fabric}"
 CRM_ATTR_GET_TGT="${HA_SBIN_DIR}/crm_attribute --quiet --query --name local_${OCF_RESKEY_fabric}_targets --node"
+CIB_XPATH_CONNECTIVITY="${HA_SBIN_DIR}/cibadmin --query --local --xpath \
+    //node_state[@uname=\"${HOSTNAME}\"]/transient_attributes//nvpair[starts-with(@name,\"#SCST${OCF_RESKEY_fabric}\")]"
 STORCLI="${OCF_RESKEY_storcli_binary_path}"
 
 # LSI/Avago Synchro CS, secondary/non-owning
@@ -103,8 +106,8 @@ meta_data() {
 	cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="SCSTLogicalUnit" version="0.4.3">
-<version>0.4.3</version>
+<resource-agent name="SCSTLogicalUnit" version="0.4.4">
+<version>0.4.4</version>
 
 <longdesc lang="en">
 Manages a Logical Unit for a SCST target. A Logical unit is a subdivision of
@@ -231,11 +234,18 @@ to this lun.</shortdesc>
 <parameter name="alua_tpg" required="0" unique="0">
 <longdesc lang="en">
 White-space separated list of SCST Asymmetric Logical Unit Assignment
- (ALUA) target port group names.
+ (ALUA) target port group names. These names must match the cluster
+node names. The most left one has highest priority.
 
 SCSI-4 ALUA is a multipathing method that allows each target port to
 manage access states and path attributes using an explict method, or
 implicitly using target-side configFS operations.
+
+If at least one node-attribute is found with a name starting with
+"#SCST${OCF_RESKEY_fabric_default}" (e.g. for the default "iscsi" fabric),
+it is also used to calculate the ALUA state. The sum of all attribute
+values has to be higher than 0 to switch to "active" state. You can use
+a common connectivity-check resource like "ping" to write such a node-attribute.
 </longdesc>
 <shortdesc lang="en">SCST ALUA target port group name</shortdesc>
 <content type="string"/>
@@ -352,9 +362,8 @@ block_dev() {
     if [ -e "${block}" ]; then
         ocf_log info "${OCF_RESOURCE_INSTANCE}: Waiting for device ${OCF_RESOURCE_INSTANCE} being blocked..."
         # Check if device is already blocked
-        if [ "$(scst_sysfs_read ${block})" != "1 0" -a  "$(scst_sysfs_read ${block})" != "1 1" ]; then
-            # This is synchronous and waits for all running commands
-            # being drained.
+        if scst_sysfs_read ${block} | egrep -qv '[1-9][0-9]* [01]'; then
+            # Do an synchronous block
             scst_sysfs_write "1" ${block} || {
                 ocf_log err "Unable to block device ${OCF_RESOURCE_INSTANCE}.";
                 exit $OCF_ERR_GENERIC
@@ -370,11 +379,16 @@ unblock_dev() {
     # Unblock the previously blocked device.
     if [ -e "${block}" ]; then
         # Check if device is already unblocked
-        if [ "$(scst_sysfs_read ${block})" != "0 0" -a  "$(scst_sysfs_read ${block})" != "0 1" ]; then
-            scst_sysfs_write "0" ${block} || {
-                ocf_log err "Unable to unblock device ${OCF_RESOURCE_INSTANCE}.";
-                exit $OCF_ERR_GENERIC
-            }
+        if scst_sysfs_read ${block} | egrep -qv '0 [01]'; then
+            # Wait until unblock is finished, there
+            # could be more than one "block"
+            until scst_sysfs_read ${block} | egrep -q '0 [01]'; do
+                scst_sysfs_write "0" ${block} || {
+                    ocf_log err "Unable to unblock device ${OCF_RESOURCE_INSTANCE}.";
+                    exit $OCF_ERR_GENERIC
+                }
+                sleep 0.$(ocf_maybe_random)
+            done
         fi
         ocf_log info "${OCF_RESOURCE_INSTANCE}: Successfully unblocked device ${OCF_RESOURCE_INSTANCE}."
     fi
@@ -426,12 +440,15 @@ update_master_score() {
     local score
     local index
     local vdname
+    local connectivity
     declare -a tpgs=( $(echo -n ${OCF_RESKEY_alua_tpg}) )
     score=0
     index=$(get_index ${HOSTNAME} "${OCF_RESKEY_alua_tpg}")
+    connectivity=$(${CIB_XPATH_CONNECTIVITY} 2>/dev/null | sed -ne 's/^[[:space:]]*<.* value="\([^"]*\)".*>$/\1/p' | \
+        awk '{sum += $1} END {print sum}')
 
     # We have an array with all TPGs, the left most
-    # one receeives the highest score. TPGs must be named
+    # one receives the highest score. TPGs must be named
     # like the node names in Pacemaker.
     score=$(( ( ${#tpgs[@]} - $index ) * 1000 ));
 
@@ -448,6 +465,18 @@ update_master_score() {
             score=10
             ocf_log debug "Virtual, shared drive ${OCF_RESKEY_synchro_cs_vd_name} not active/optimized on this node."
         fi
+    fi
+
+    # If there is a connectivity-check writing one (or more)
+    # attribute(s) like "#SCSTiscsi-netX" this is also evaluated.
+    # The value must be higher than 0 after summing up the
+    # values from all transient attributes found.
+    if [ -n "${connectivity}" ] && [ $connectivity -le 0 ]; then
+        # Don't set the score to 0 if for any reason all nodes
+        # loose their connectivity at once - still allow to promote
+        # a master.
+        score=$(( ${#tpgs[@]} - $index ))
+        ocf_log debug "Setting master score to 0 because of missing connectivity."
     fi
 
     ocf_log debug "Setting master score to $score"
@@ -580,13 +609,18 @@ SCSTLogicalUnit_acls() {
         # remove empty (or only exporting lun 0) ini_groups
         for initiator in $(find ${FABRIC_BASE}/${target}/ini_groups/ -mindepth 1 -maxdepth 1 -type d) ; do
             if [ $(find ${initiator}/luns -mindepth 1 -maxdepth 1 -type d ! -name '0' | wc -l) -eq 0 ] ; then
-                # Forcefully close all sessions.
-                # When using iSCSI MPIO, several sessions per initiator can be available.
-                for session in $(ls -1d ${FABRIC_BASE}/${target}/sessions/${initiator##*/} \
-                                        ${FABRIC_BASE}/${target}/sessions/${initiator##*/}_* 2>/dev/null) ; do
-                    scst_sysfs_write "1" "${session}/force_close" && \
-                    ocf_log warn "Forcefully closed session from initiator ${initiator##*/}."
-                done
+                # Loop until all connections have been closed
+                while [ -d ${FABRIC_BASE}/${target}/sessions/${initiator##*/} ]; do
+		    # Forcefully close all sessions - this is async
+		    # When using iSCSI MPIO, several sessions per initiator can be available.
+		    for session in $(ls -1d ${FABRIC_BASE}/${target}/sessions/${initiator##*/} \
+				   ${FABRIC_BASE}/${target}/sessions/${initiator##*/}_* 2>/dev/null) ; do
+			scst_sysfs_write "1" "${session}/force_close" && \
+			ocf_log warn "Forcefully closed session from initiator ${initiator##*/}."
+		    done
+                    # Give it some time to close
+                    sleep 0.$(ocf_maybe_radom)
+		done
                 # Delete the ini_group
                 scst_sysfs_write "del ${initiator##*/}" ${FABRIC_BASE}/${target}/ini_groups/mgmt || {
                      ocf_log err "Unable to delete initiator group ${initiator##*/} from target ${target}.";
@@ -757,7 +791,7 @@ SCSTLogicalUnit_start() {
 
                 # Sort the targets in local_targets (like the TPGs) so we can
                 # apply "rel_tgt_id"s in a consistent way.
-                declare -a local_targets=( $(for target in $(${CRM_ATTR_GET_TGT} ${tpg}); do echo ${target};done | sort -bdf) )
+                declare -a local_targets=( $(for target in $(${CRM_ATTR_GET_TGT} ${tpg} 2>/dev/null); do echo ${target};done | sort -bdf) )
                 for target in "${local_targets[@]}"; do
                     # We need a unique rel_tgt_id for every port in the TPG,
                     # also for multiple ports per node.
@@ -1111,12 +1145,12 @@ SCSTLogicalUnit_validate() {
 	defvar=OCF_RESKEY_${var}_default
 	if [ -n "${!envar}" ]; then
 	    if  [[ "${!envar}" != "${!defvar}" ]];then
-	        case "$__OCF_ACTION" in
+		case "$__OCF_ACTION" in
                     start|validate-all)
                       ocf_log warn "Configuration parameter \"${var}\"" \
                        "is not supported by SCST's ${OCF_RESKEY_fabric} fabric" \
                        "and will be ignored." ;;
-	        esac
+		esac
 	    fi
 	fi
     done
@@ -1151,9 +1185,6 @@ SCSTLogicalUnit_validate() {
 	    exit $OCF_ERR_INSTALLED
         }
     fi
-
-    # We need the nodename several times.
-    HOSTNAME=$(crm_node -n)
 
     return $OCF_SUCCESS
 }
