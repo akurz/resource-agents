@@ -630,11 +630,13 @@ SCSTLogicalUnit_acls() {
                     sleep 0.$(ocf_maybe_random)
 		done
                 # Delete the ini_group
-                scst_sysfs_write "del ${initiator##*/}" ${FABRIC_BASE}/${target}/ini_groups/mgmt || {
-                     ocf_log err "Unable to delete initiator group ${initiator##*/} from target ${target}.";
-                     exit $OCF_ERR_GENERIC
-                }
-                ocf_log debug "${OCF_RESOURCE_INSTANCE}: Deleted empty initiator group ${initiator##*/} from target ${target}."
+                if [ -d "${initiator}" ]; then
+                    scst_sysfs_write "del ${initiator##*/}" ${FABRIC_BASE}/${target}/ini_groups/mgmt || {
+                         ocf_log err "Unable to delete initiator group ${initiator##*/} from target ${target}.";
+                         exit $OCF_ERR_GENERIC
+                    }
+                ocf_log info "${OCF_RESOURCE_INSTANCE}: Deleted empty initiator group ${initiator##*/} from target ${target}."
+		fi
            fi
         done
     done
