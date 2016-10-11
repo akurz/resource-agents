@@ -363,7 +363,7 @@ block_dev() {
         ocf_log info "${OCF_RESOURCE_INSTANCE}: Waiting for device ${OCF_RESOURCE_INSTANCE} being blocked..."
         # Check if device is already blocked
         if scst_sysfs_read ${block} | egrep -qv '[1-9][0-9]* [01]'; then
-            # Do an synchronous block
+            # Do a synchronous block
             scst_sysfs_write "1" ${block} || {
                 ocf_log err "Unable to block device ${OCF_RESOURCE_INSTANCE}.";
                 exit $OCF_ERR_GENERIC
@@ -619,7 +619,7 @@ SCSTLogicalUnit_acls() {
 			ocf_log warn "Forcefully closed session from initiator ${initiator##*/}."
 		    done
                     # Give it some time to close
-                    sleep 0.$(ocf_maybe_radom)
+                    sleep 0.$(ocf_maybe_random)
 		done
                 # Delete the ini_group
                 scst_sysfs_write "del ${initiator##*/}" ${FABRIC_BASE}/${target}/ini_groups/mgmt || {
