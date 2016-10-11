@@ -609,6 +609,14 @@ SCSTLogicalUnit_acls() {
         # remove empty (or only exporting lun 0) ini_groups
         for initiator in $(find ${FABRIC_BASE}/${target}/ini_groups/ -mindepth 1 -maxdepth 1 -type d) ; do
             if [ $(find ${initiator}/luns -mindepth 1 -maxdepth 1 -type d ! -name '0' | wc -l) -eq 0 ] ; then
+		# Unexport LUN0 to prevent reconnects that would block ini_group deletion later.
+                if [ -d "${initiator}/luns/0" ]; then
+                    scst_sysfs_write "del 0" ${initiator}/luns/mgmt || {
+                        ocf_log err "Unable to unexport LUN 0 - ${initiator}";
+                        exit $OCF_ERR_GENERIC
+                    }
+                    ocf_log debug "${OCF_RESOURCE_INSTANCE}: Unexported LUN 0  - ${initiator}"
+                fi
                 # Loop until all connections have been closed
                 while [ -d ${FABRIC_BASE}/${target}/sessions/${initiator##*/} ]; do
 		    # Forcefully close all sessions - this is async
