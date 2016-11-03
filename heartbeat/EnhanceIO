@@ -2,22 +2,22 @@
 #
 # EnhanceIO
 #
-# Description: Resource Agent for highly available EnhanceIO caches.
-#              Requires installed EnhanceIO kernel module and utilities.
+# Description:  Resource Agent for highly available EnhanceIO caches.
+#               Requires installed EnhanceIO kernel module and utilities.
 #
-# Authors:     Andreas Kurz
+# Authors:      Andreas Kurz
 #
-# Support:     linux-ha@lists.linux-ha.org
-# License:     GNU General Public License (GPL)
+# Support:      linux-ha@lists.linux-ha.org
+# License:      GNU General Public License (GPL)
 #
-# (c) 2015     Andreas Kurz <andreas.kurz AT gmail DOT com>
-# (c) 2013     hastexo Professional Services GmbH
+# (c) 2015-2016 Andreas Kurz <andreas.kurz AT gmail DOT com>
+# (c) 2013      hastexo Professional Services GmbH
 #
 # This resource agent is derived from the flashcache resource
 # agent, which itself is made available to the public under the
 # following copyright:
 # 
-# (c) 2011     Florian Haas
+# (c) 2011      Florian Haas
 #
 # See usage() function below for more details ...
 #
