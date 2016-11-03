@@ -51,8 +51,8 @@ enhanceio_meta_data() {
     cat <<EOF
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="EnhanceIO" version="0.3">
-  <version>0.3</version>
+<resource-agent name="EnhanceIO" version="0.4">
+  <version>0.4</version>
   <longdesc lang="en">
 This resource agent manages an EnhanceIO cache device, loading any existing
 cache from the flash device on startup and flushing the cache to the
@@ -295,8 +295,7 @@ enhanceio_monitor() {
             esac
             grep -E -q "^${key}[[:space:]]+${nr}$" $config
             if [ $? -ne 0 ]; then
-                ocf_log err "Existing config ${config} would be overwritten by ${OCF_RESOURCE_INSTANCE}. Bailing out."
-                exit $OCF_ERR_INSTALLED
+                ocf_log warn "Existing config ${config} detected but with different settings: ${key}!=${val}"
 	    fi
         done
         # Great!
