@@ -198,7 +198,7 @@ enhanceio_start() {
 	ocf_run modprobe -v enhanceio || exit $OCF_ERR_INSTALLED
     fi
 
-    ocf_log debug "Enhanceio module information obtained from kernel: `cat /proc/enhanceio/version`"
+    ocf_log debug "Enhanceio module information obtained from kernel: $(cat /proc/enhanceio/version)"
 
     # Reload is possible on "policy" or "cache_mode"
     # changes.
@@ -263,14 +263,14 @@ enhanceio_stop() {
     ocf_log debug "Switching cache into read only mode"
     ocf_run eio_cli edit -m ro -c ${OCF_RESKEY_cache_name}
     # 2. wait for data in cache to be written to slower disk
-    ocf_log debug "Waiting for cached data to be flushed to disk"
+    ocf_log info "Waiting for cached data to be flushed to disk"
     while true; do
         grep -E -q "^nr_dirty[[:space:]]+0\$" \
         /proc/enhanceio/${OCF_RESKEY_cache_name}/stats && break
         ocf_log debug "Still waiting for cached data to drain: $(grep nr_dirty /proc/enhanceio/${OCF_RESKEY_cache_name}/stats)"
         sleep 1
     done
-    ocf_log debug "Deleting the cache device"
+    ocf_log info "Deleting the cache device"
     # 3. data is now consistent also for wb mode - delete the cache device
     ocf_run eio_cli delete -c ${OCF_RESKEY_cache_name}
     rc=$?
