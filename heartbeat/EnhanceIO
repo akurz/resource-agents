@@ -28,6 +28,8 @@
 #   OCF_RESKEY_policy
 #   OCF_RESKEY_cache_mode
 #   OCF_RESKEY_block_size
+#   OCF_RESKEY_gpt_partition_name
+#   OCF_RESKEY_persistent_cache
 #######################################################################
 # Initialization:
 
@@ -38,10 +40,16 @@
 OCF_RESKEY_policy_default="fifo"
 OCF_RESKEY_cache_mode_default="wt"
 OCF_RESKEY_block_size_default="4096"
+OCF_RESKEY_gpt_partition_name_default="eio_cache"
+OCF_RESKEY_persistent_cache_default="false"
 
 : ${OCF_RESKEY_policy=${OCF_RESKEY_policy_default}}
 : ${OCF_RESKEY_cache_mode=${OCF_RESKEY_cache_mode_default}}
 : ${OCF_RESKEY_block_size=${OCF_RESKEY_block_size_default}}
+: ${OCF_RESKEY_gpt_partition_name=${OCF_RESKEY_gpt_partition_name_default}}
+: ${OCF_RESKEY_persistent_cache=${OCF_RESKEY_persistent_cache_default}}
+
+UDEVFILE="/etc/udev/rules.d/94-enhanceio-${OCF_RESKEY_cache_name}.rule"
 
 enhanceio_usage() {
   echo "usage: $0 {start|stop|status|monitor|meta-data|validate-all}"
@@ -107,6 +115,27 @@ disk on graceful shutdown.
       <shortdesc lang="en">Cache entry block size</shortdesc>
       <content type="integer" default="${OCF_RESKEY_block_size_default}"/>
     </parameter>
+    <parameter name="gpt_partition_name" unique="0" required="0">
+      <longdesc lang="en">
+      The GPT partition name that is used on the cache device's
+      SSD partition. A name must be set to safely identify
+      the partition for disabling cache persistence. This name
+      is NOT set by this resource agent.
+      </longdesc>
+      <shortdesc lang="en">SSD GPT partition name</shortdesc>
+      <content type="string" default="${OCF_RESKEY_gpt_partition_name_default}"/>
+    </parameter>
+    <parameter name="persistent_cache" unique="0" required="0">
+      <longdesc lang="en">
+      In a HA environment it normally makes no sense to
+      have EIO cache persistence over reboots as there
+      is another node taking over the cache. So the cached
+      data is very likely outdated and stale after a reboot.
+      So by default the persistence is disabled.
+      </longdesc>
+      <shortdesc lang="en">Enable cache persistence</shortdesc>
+      <content type="boolean" default="${OCF_RESKEY_persistent_cache}"/>
+    </parameter>
   </parameters>
   <actions>
     <action name="start"        timeout="60" />
@@ -135,6 +164,11 @@ enhanceio_start() {
     if [ -e /proc/enhanceio/${OCF_RESKEY_cache_name} ]; then
 	ocf_log err "Existing file /proc/enhanceio/${OCF_RESKEY_name} would be overwritten by ${OCF_RESOURCE_INSTANCE}. Bailing out."
 	exit $OCF_ERR_INSTALLED
+    fi
+
+    # Cleanup any old metadata before starting
+    if ! ocf_is_true ${OCF_RESKEY_persistent_cache}; then
+	erase_metadata
     fi
 
     if [ ! -e /proc/enhanceio/version ]; then
@@ -170,7 +204,13 @@ enhanceio_start() {
         sleep 1
     done
 
-    # only return $OCF_SUCCESS if _everything_ succeeded as expected
+    # Normally we want the udev rule file being deleted - no
+    # cache persistence. Delete the file already after starting
+    # in case the stop is not successful.
+    if ! ocf_is_true ${OCF_RESKEY_persistent_cache}; then
+	rm -f "${UDEVFILE}"
+    fi
+
     return $OCF_SUCCESS
 }
 
@@ -231,7 +271,12 @@ enhanceio_stop() {
         sleep 1
     done
 
-    # only return $OCF_SUCCESS if _everything_ succeeded as expected
+    # Cleanup any meta-data before next start or for device reuse
+    if ! ocf_is_true ${OCF_RESKEY_persistent_cache}; then
+	erase_metadata
+	rm -f "${UDEVFILE}"
+    fi
+
     return $OCF_SUCCESS
 
 }
@@ -306,6 +351,8 @@ enhanceio_monitor() {
 }
 
 enhanceio_validate_all() {
+    local bin
+
     # Check required parameters
     if [ -z "${OCF_RESKEY_src_device}" ]; then
 	ocf_log err "Required parameter \"src_device\" not configured!"
@@ -321,32 +368,49 @@ enhanceio_validate_all() {
     fi
 
     # Check valid options
-    case ${OCF_RESKEY_cache_mode} in 
+    case ${OCF_RESKEY_cache_mode} in
         wt|ro|wb) ;;
         *) exit $OCF_ERR_CONFIGURED;;
     esac
-    case ${OCF_RESKEY_policy} in 
+    case ${OCF_RESKEY_policy} in
         fifo|lru|rand) ;;
         *) exit $OCF_ERR_CONFIGURED;;
     esac
-    case ${OCF_RESKEY_block_size} in 
+    case ${OCF_RESKEY_block_size} in
         2048|4096|8192) ;;
         *) exit $OCF_ERR_CONFIGURED;;
     esac
 
     # Test for required binaries
-    check_binary eio_cli
-    check_binary grep
+    for bin in eio_cli grep blkid dd tr strings; do
+	check_binary $bin
+    done
 
     # Don't validate devices on stop. At least try to
     # stop any remains.
     if ! ocf_is_probe && [ "$__OCF_ACTION" != "stop" ]; then
 	for dev in ${OCF_RESKEY_src_device} ${OCF_RESKEY_ssd_device}; do
 	    if [ ! -b ${dev} ]; then
-		ocf_log err "${dev} does not exist or is not a block device!"
+		ocf_exit_reason "${dev} does not exist or is not a block device!"
 		exit $OCF_ERR_INSTALLED
 	    fi
 	done
+    fi
+
+    # Test the ssd_device device for any filesystems/raids/other
+    # usages that are detected by "blkid"
+    if blkid -o udev -p ${OCF_RESKEY_ssd_device} | grep -qE '^ID_FS_'; then
+	ocf_log error "The device \"${OCF_RESKEY_ssd_device}\" seems to be already in not-EIO-use."
+	ocf_exit_reason "Device \"${OCF_RESKEY_ssd_device}\" in use - but not by EIO"
+	exit $OCF_ERR_CONFIGURED
+    fi
+
+    # Is there the correct GPT partition name on the ssd_device?
+    if ! blkid -o udev -p ${OCF_RESKEY_ssd_device} | \
+	grep -qE "ID_PART_ENTRY_NAME=${OCF_RESKEY_gpt_partition_name}\$"; then
+	ocf_log error "GPT partition name \"${OCF_RESKEY_gpt_partition_name}\" expected on device \"${OCF_RESKEY_ssd_device}\""
+	ocf_exit_reason "Wrong GPT partition name on \"${OCF_RESKEY_ssd_device}\""
+	exit $OCF_ERR_CONFIGURED
     fi
 
     return $OCF_SUCCESS
