@@ -81,8 +81,8 @@ enhanceio_meta_data() {
     cat <<EOF
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="EnhanceIO" version="0.4">
-  <version>0.4</version>
+<resource-agent name="EnhanceIO" version="0.5">
+  <version>0.5</version>
   <longdesc lang="en">
 This resource agent manages an EnhanceIO cache device, loading any existing
 cache from the flash device on startup and flushing the cache to the
@@ -322,17 +322,16 @@ enhanceio_monitor() {
         fi
     done
 
-    # First, see if the cache is configured 
+    # First, see if the cache is configured
     config=/proc/enhanceio/${OCF_RESKEY_cache_name}/config
     if [ -e ${config} ]; then
-        # OK, let's check if it has the correct devices and block size configured  
+        # OK, let's check if it has the correct devices configured
         # In /proc: "src_device" maps to "src_name"
         #          "ssd_device" maps to "ssd_name"
-	for key in src_name ssd_name block_size; do
+	for key in src_name ssd_name; do
             case $key in
                 src_name)   val="$OCF_RESKEY_src_device";;
                 ssd_name)   val="$OCF_RESKEY_ssd_device";;
-                block_size) val="$OCF_RESKEY_block_size";;
             esac
 	    grep -E -q "^${key}[[:space:]]+${val}\$" $config
             if [ $? -ne 0 ]; then
