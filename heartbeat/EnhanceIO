@@ -51,6 +51,28 @@ OCF_RESKEY_persistent_cache_default="false"
 
 UDEVFILE="/etc/udev/rules.d/94-enhanceio-${OCF_RESKEY_cache_name}.rule"
 
+erase_metadata() {
+    local mdhave
+    local mdwant
+    mdhave="$(dd if=${OCF_RESKEY_ssd_device} bs=128K count=1 iflag=direct 2>/dev/null | \
+		strings | tr '\n' ' ')"
+    mdwant="${OCF_RESKEY_ssd_device} ${OCF_RESKEY_src_device} ${OCF_RESKEY_cache_name} "
+
+    # Only erase own metadata - correct src_device/ssd_device/resource name
+    # must be found in the first 128kB of the cache device.
+    if [ "${mdhave}" = "${mdwant}" ]; then
+	ocf_log info "Deleting EIO metadata on device ${OCF_RESKEY_ssd_device}."
+	ocf_run -q dd if=/dev/zero bs=128K count=1 oflag=direct of=${OCF_RESKEY_ssd_device}
+    else
+	ocf_log info "Not erasing EIO meta data. Searched for \"${mdwant}\" but found: \"${mdhave}\""
+    fi
+    # Just to be sure ...
+    rm -f "${UDEVFILE}"
+
+    # Don't fail on meta data cleanup
+    return $OCF_SUCCESS
+}
+
 enhanceio_usage() {
   echo "usage: $0 {start|stop|status|monitor|meta-data|validate-all}"
 }
