@@ -5,25 +5,25 @@
 # Description:  Resource Agent for highly available EnhanceIO caches.
 #               Requires installed EnhanceIO kernel module and utilities.
 #
-# Authors:      Andreas Kurz
+# Author:       Andreas Kurz
 #
 # Support:      linux-ha@lists.linux-ha.org
 # License:      GNU General Public License (GPL)
 #
-# (c) 2015-2016 Andreas Kurz <andreas.kurz AT gmail DOT com>
+# (c) 2015-2017 Andreas Kurz <andreas.kurz AT gmail DOT com>
 # (c) 2013      hastexo Professional Services GmbH
 #
 # This resource agent is derived from the flashcache resource
 # agent, which itself is made available to the public under the
 # following copyright:
-# 
+#
 # (c) 2011      Florian Haas
 #
 # See usage() function below for more details ...
 #
 # OCF instance parameters:
-#   OCF_RESKEY_src_disk
-#   OCF_RESKEY_ssd_disk
+#   OCF_RESKEY_src_device
+#   OCF_RESKEY_ssd_device
 #   OCF_RESKEY_cache_name
 #   OCF_RESKEY_policy
 #   OCF_RESKEY_cache_mode
@@ -219,7 +219,7 @@ enhanceio_stop() {
     # for stop (delete) errors don't look critical.
     if [ "$rc" -ne 0 -a "$rc" -ne 3 ]; then
         exit $OCF_ERR_GENERIC
-    fi 
+    fi
 
     # After the resource has been stopped, check whether it shut down
     # correctly. If the resource stops asynchronously, the agent may
@@ -382,3 +382,6 @@ rc=$?
 
 ocf_log debug "${OCF_RESOURCE_INSTANCE} $__OCF_ACTION returned $rc"
 exit $rc
+
+#
+# vim:tabstop=4:shiftwidth=4:textwidth=0:wrapmargin=0:et:
