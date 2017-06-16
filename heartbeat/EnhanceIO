@@ -49,7 +49,7 @@ OCF_RESKEY_persistent_cache_default="false"
 : ${OCF_RESKEY_gpt_partition_name=${OCF_RESKEY_gpt_partition_name_default}}
 : ${OCF_RESKEY_persistent_cache=${OCF_RESKEY_persistent_cache_default}}
 
-UDEVFILE="/etc/udev/rules.d/94-enhanceio-${OCF_RESKEY_cache_name}.rule"
+UDEVFILE="/etc/udev/rules.d/94-enhanceio-${OCF_RESKEY_cache_name}.rules"
 
 erase_metadata() {
     local mdhave
@@ -64,12 +64,13 @@ erase_metadata() {
 	ocf_log info "Deleting EIO metadata on device ${OCF_RESKEY_ssd_device}."
 	ocf_run -q dd if=/dev/zero bs=128K count=1 oflag=direct of=${OCF_RESKEY_ssd_device}
     else
-	ocf_log info "Not erasing EIO meta data. Searched for \"${mdwant}\" but found: \"${mdhave}\""
+	ocf_log info "Not erasing EIO metadata. Searched for \"${mdwant}\" but found: \"${mdhave}\""
     fi
     # Just to be sure ...
+    ocf_log info "Forcefully removing udev rules file ${UDEVFILE} after metadata cleanup."
     rm -f "${UDEVFILE}"
 
-    # Don't fail on meta data cleanup
+    # Don't fail on metadata cleanup
     return $OCF_SUCCESS
 }
 
@@ -81,8 +82,8 @@ enhanceio_meta_data() {
     cat <<EOF
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="EnhanceIO" version="0.5">
-  <version>0.5</version>
+<resource-agent name="EnhanceIO" version="0.6">
+  <version>0.6</version>
   <longdesc lang="en">
 This resource agent manages an EnhanceIO cache device, loading any existing
 cache from the flash device on startup and flushing the cache to the
@@ -156,7 +157,7 @@ disk on graceful shutdown.
       So by default the persistence is disabled.
       </longdesc>
       <shortdesc lang="en">Enable cache persistence</shortdesc>
-      <content type="boolean" default="${OCF_RESKEY_persistent_cache}"/>
+      <content type="boolean" default="${OCF_RESKEY_persistent_cache_default}"/>
     </parameter>
   </parameters>
   <actions>
@@ -230,6 +231,7 @@ enhanceio_start() {
     # cache persistence. Delete the file already after starting
     # in case the stop is not successful.
     if ! ocf_is_true ${OCF_RESKEY_persistent_cache}; then
+        ocf_log info "Forcefully removing udev rules file ${UDEVFILE} after resource start."
 	rm -f "${UDEVFILE}"
     fi
 
@@ -296,6 +298,8 @@ enhanceio_stop() {
     # Cleanup any meta-data before next start or for device reuse
     if ! ocf_is_true ${OCF_RESKEY_persistent_cache}; then
 	erase_metadata
+	# Just to be sure
+        ocf_log info "Forcefully removing udev rules file ${UDEVFILE} after resource stop."
 	rm -f "${UDEVFILE}"
     fi
 
@@ -304,11 +308,14 @@ enhanceio_stop() {
 }
 
 enhanceio_monitor() {
+    local config
     local rc
     local dev
     local key
     local val
     local nr
+
+    config=/proc/enhanceio/${OCF_RESKEY_cache_name}/config
 
     # No devices, assume the enhanceio cache is not running
     # - if no configuration is present. Give out some warnings,
@@ -323,7 +330,6 @@ enhanceio_monitor() {
     done
 
     # First, see if the cache is configured
-    config=/proc/enhanceio/${OCF_RESKEY_cache_name}/config
     if [ -e ${config} ]; then
         # OK, let's check if it has the correct devices configured
         # In /proc: "src_device" maps to "src_name"
