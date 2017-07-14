@@ -8,7 +8,7 @@
 #
 # License:      GNU General Public License (GPL)
 #
-# (c) 2015-2016 Andreas Kurz <andreas.kurz AT gmail DOT com>
+# (c) 2015-2017 Andreas Kurz <andreas.kurz AT gmail DOT com>
 #
 # This resource agent is derived from the iSCSITarget resource
 # agent, which itself is made available to the public under the
@@ -68,8 +68,8 @@ meta_data() {
 	cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="SCSTTarget" version="0.4.0">
-<version>0.4.0</version>
+<resource-agent name="SCSTTarget" version="0.5.0">
+<version>0.5.0</version>
 
 <longdesc lang="en">
 Manages SCST targets. A target is a daemon that speaks
