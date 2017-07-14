@@ -90,14 +90,6 @@ CIB_XPATH_CONNECTIVITY="${HA_SBIN_DIR}/cibadmin --query --local --xpath \
     //node_state[@uname=\"${HOSTNAME}\"]/transient_attributes//nvpair[starts-with(@name,\"#SCST${OCF_RESKEY_fabric}\")]"
 STORCLI="${OCF_RESKEY_storcli_binary_path}"
 
-# LSI/Avago Synchro CS, secondary/non-owning
-# controller can also process I/O
-if [ -n "${OCF_RESKEY_synchro_cs_vd_name}" ]; then
-    STANDBY="nonoptimized"
-else
-    STANDBY="standby"
-fi
-
 # Lockfile, for LUs starting in parallel
 LOCKFILE=${HA_RSCTMP}/SCSTLogicalUnit.lock
 #######################################################################
@@ -794,10 +786,10 @@ SCSTLogicalUnit_start() {
                 scst_sysfs_write "0" ${dev_group}/target_groups/${tpg}/preferred || {
                     ocf_log err "Unable to set \"preferred\" to 0 - TPG ${tpg}, device_group ${OCF_RESOURCE_INSTANCE}.";
                 }
-                scst_sysfs_write "${STANDBY}" ${dev_group}/target_groups/${tpg}/state || {
-                    ocf_log err "Unable to set state to \"${STANDBY}\" - TPG ${tpg}, device_group ${OCF_RESOURCE_INSTANCE}.";
+                scst_sysfs_write "nonoptimized" ${dev_group}/target_groups/${tpg}/state || {
+                    ocf_log err "Unable to set state to \"nonoptimized\" - TPG ${tpg}, device_group ${OCF_RESOURCE_INSTANCE}.";
                 }
-                ocf_log debug "${OCF_RESOURCE_INSTANCE}: TPG ${tpg} for device_group ${OCF_RESOURCE_INSTANCE} is ${STANDBY}."
+                ocf_log debug "${OCF_RESOURCE_INSTANCE}: TPG ${tpg} for device_group ${OCF_RESOURCE_INSTANCE} is nonoptimized."
 
                 # Sort the targets in local_targets (like the TPGs) so we can
                 # apply "rel_tgt_id"s in a consistent way.
@@ -899,7 +891,7 @@ SCSTLogicalUnit_monitor() {
 
     handler_path="${SCST_BASE}/handlers/${OCF_RESKEY_device_handler}"
     dev_path="${handler_path}/${OCF_RESOURCE_INSTANCE}"
-    alua_state="${STANDBY}"
+    alua_state="nonoptimized"
     index=${#ids[@]}
 
     # If our backing device (or file) doesn't even exist, we're not running
@@ -983,7 +975,7 @@ SCSTLogicalUnit_promote() {
 
     case $rc in
         $OCF_SUCCESS)
-            ocf_log debug "${OCF_RESOURCE_INSTANCE}: ALUA - currently in Slave state, TPG $HOSTNAME is ${STANDBY}/not-preferred"
+            ocf_log debug "${OCF_RESOURCE_INSTANCE}: ALUA - currently in Slave state, TPG $HOSTNAME is nonoptimized/not-preferred"
             ;;
         $OCF_NOT_RUNNING)
             ocf_log info "ALUA: Trying to promote resource ${OCF_RESOURCE_INSTANCE} that is not running, start it ..."
@@ -1024,7 +1016,7 @@ SCSTLogicalUnit_demote() {
             exit $OCF_ERR_GENERIC
             ;;
         $OCF_SUCCESS)
-            ocf_log debug "${OCF_RESOURCE_INSTANCE}: ALUA - already in Slave state, TPG $HOSTNAME is in ${STANDBY} mode"
+            ocf_log debug "${OCF_RESOURCE_INSTANCE}: ALUA - already in Slave state, TPG $HOSTNAME is in nonoptimized mode"
             return $OCF_SUCCESS
             ;;
         *)
@@ -1033,11 +1025,11 @@ SCSTLogicalUnit_demote() {
     esac
 
     # Now do the demotion
-    update_alua_access_state $HOSTNAME ${STANDBY} || {
-        ocf_log error "Unable to set ALUA access state for lun_${OCF_RESKEY_lun}/${OCF_RESOURCE_INSTANCE} to ${STANDBY}!";
+    update_alua_access_state $HOSTNAME nonoptimized || {
+        ocf_log error "Unable to set ALUA access state for lun_${OCF_RESKEY_lun}/${OCF_RESOURCE_INSTANCE} to nonoptimized!";
         exit $OCF_ERR_GENERIC
     }
-    ocf_log debug "${OCF_RESOURCE_INSTANCE}: ALUA - demote was successfull, TPG $HOSTNAME is now ${STANDBY}"
+    ocf_log debug "${OCF_RESOURCE_INSTANCE}: ALUA - demote was successfull, TPG $HOSTNAME is now nonoptimized"
 
     # In case of a block device, flush any outstanding I/O to the device
     flushbufs
@@ -1071,7 +1063,7 @@ SCSTLogicalUnit_notify() {
                     done
                 else
                     # Be sure to set correct slave mode
-                    update_alua_access_state $node ${STANDBY}
+                    update_alua_access_state $node nonoptimized
                 fi
             done
             ;;
@@ -1084,7 +1076,7 @@ SCSTLogicalUnit_notify() {
         post/demote)
             for node in $demoteit; do
                 # Switch all new slave instances TPG to standby
-                update_alua_access_state $node ${STANDBY}
+                update_alua_access_state $node nonoptimized
             done
             ;;
         post/stop)
