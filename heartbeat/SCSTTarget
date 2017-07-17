@@ -170,7 +170,6 @@ must be at least 12 bytes long. Username and password must not contain spaces.
 <action name="stop"         timeout="10" />
 <action name="status"       timeout="10" interval="10" depth="0" />
 <action name="monitor"      timeout="10" interval="10" depth="0" />
-<action name="reload"       timeout="30" />
 <action name="meta-data"    timeout="5" />
 <action name="validate-all"   timeout="10" />
 </actions>
@@ -557,16 +556,6 @@ SCSTTarget_stop() {
     return $OCF_SUCCESS
 }
 
-SCSTTarget_reload() {
-    case $OCF_RESKEY_fabric in
-        iscsi|qla2x00t)
-            SCSTTarget_start
-            ;;
-    esac
-
-    return $OCF_SUCCESS
-}
-
 SCSTTarget_monitor() {
     declare -a targets=( $(echo ${OCF_RESKEY_id}) )
     local index=${#targets[@]}
@@ -724,7 +713,6 @@ SCSTTarget_validate
 case $__OCF_ACTION in
 start)		SCSTTarget_start;;
 stop)		SCSTTarget_stop;;
-reload)		SCSTTarget_reload;;
 monitor|status)	SCSTTarget_monitor;;
 validate-all)	;;
 *)		SCSTTarget_usage
