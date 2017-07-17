@@ -58,7 +58,7 @@ fi
 # For convenience
 SCST_BASE="/sys/kernel/scst_tgt"
 FABRIC_BASE="${SCST_BASE}/targets/${OCF_RESKEY_fabric}"
-CRM_ATTR_TGT="${HA_SBIN_DIR}/crm_attribute --node ${HOSTNAME} --name local_${OCF_RESKEY_fabric}_targets --lifetime forever"
+CRM_ATTR_TGT="${HA_SBIN_DIR}/crm_attribute --node ${HOSTNAME} --name local_${OCF_RESKEY_fabric}_targets --lifetime reboot"
 
 # Lockfile, to prevent races on multi-target setups
 LOCKFILE=${HA_RSCTMP}/SCSTTarget.lock
@@ -78,7 +78,7 @@ Manages SCST targets. A target is a daemon that speaks
 <shortdesc lang="en">SCST target export agent</shortdesc>
 
 <parameters>
-<parameter name="fabric" required="0" unique="1">
+<parameter name="fabric" required="0" unique="0">
 <longdesc lang="en">
 The SCST target supports several fabric types. Must be one of "iscsi" or
 "qla2x00t". If unspecified, "iscsi" is used.
@@ -471,8 +471,11 @@ SCSTTarget_start() {
     fi
 
     # Write the local configured targets into CIB -
-    # need this for ALUA TPGs
-    ${CRM_ATTR_TGT} --update "${OCF_RESKEY_id}"
+    # need this for ALUA TPGs but not for
+    # forwarding targets
+    if ! echo "${OCF_RESKEY_additional_parameters}" | grep -qi 'forwarding=1'; then
+        ${CRM_ATTR_TGT} --update "${OCF_RESKEY_id}"
+    fi
 
     return $OCF_SUCCESS
 }
@@ -545,8 +548,11 @@ SCSTTarget_stop() {
         fi
     fi
 
-    # Cleanup information for ALUA on target stop
-    ${CRM_ATTR_TGT} --delete
+    # Cleanup information for ALUA on target stop,
+    # but not for forwarding targets
+    if ! echo "${OCF_RESKEY_additional_parameters}" | grep -qi 'forwarding=1'; then
+        ${CRM_ATTR_TGT} --delete
+    fi
 
     return $OCF_SUCCESS
 }
