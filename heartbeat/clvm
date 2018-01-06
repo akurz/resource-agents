@@ -36,7 +36,7 @@ meta_data() {
 	cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="clvm" version="0.9">
+<resource-agent name="clvm">
 <version>1.0</version>
 
 <longdesc lang="en">
@@ -78,7 +78,6 @@ is set to.
 <action name="start"        timeout="90" />
 <action name="stop"         timeout="90" />
 <action name="monitor"      timeout="90" interval="30" depth="0" />
-<action name="reload"       timeout="90" />
 <action name="meta-data"    timeout="10" />
 <action name="validate-all"   timeout="20" />
 </actions>
@@ -360,6 +359,12 @@ clvmd_start()
 	if [ $? -ne $OCF_SUCCESS ]; then
 		ocf_exit_reason "Unable to start, Environment validation failed."
 		return $?
+	fi
+
+	# systemd drop-in to stop process before storage services during
+	# shutdown/reboot
+	if ps -p 1 | grep -q systemd ; then
+		systemd_drop_in "99-clvmd" "After" "blk-availability.service"
 	fi
 
 	clvmd_status

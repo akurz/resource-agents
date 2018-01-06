@@ -68,7 +68,7 @@ check_all_executables() {
 		check "$script"
 	done < <(eval "$(find_cmd)")
 	if [ $failed -gt 0 ]; then
-		echo "$failed failures detected."
+		echo "ci/build.sh: $failed failure(s) detected."
 		exit 1
 	fi
 	exit 0
@@ -76,6 +76,6 @@ check_all_executables() {
 
 ./autogen.sh
 ./configure
-make
-[ $? ] || failed=$((failed + 1))
+make check
+[ $? -eq 0 ] || failed=$((failed + 1))
 check_all_executables

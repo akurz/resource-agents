@@ -40,7 +40,7 @@ meta_data()
 	cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="docker" version="0.9">
+<resource-agent name="docker">
 <version>1.0</version>
 
 <longdesc lang="en">
@@ -106,6 +106,15 @@ it has initialized.
 <content type="string"/>
 </parameter>
 
+<parameter name="mount_points" required="0" unique="0">
+<longdesc lang="en">
+A comma separated list of directories that the container is expecting to use.
+The agent will ensure they exist by running 'mkdir -p' 
+</longdesc>
+<shortdesc lang="en">Required mount points</shortdesc>
+<content type="string"/>
+</parameter>
+
 <parameter name="monitor_cmd" required="0" unique="0">
 <longdesc lang="en">
 Specifiy the full path of a command to launch within the container to check
@@ -143,6 +152,27 @@ containers are removed after stop. With the reuse option containers
 will persist after the container stops.
 </longdesc>
 <shortdesc lang="en">reuse container</shortdesc>
+<content type="boolean"/>
+</parameter>
+
+<parameter name="query_docker_health" required="0" unique="0">
+<longdesc lang="en">
+Query the builtin healthcheck of docker (v1.12+) to determine health of the
+container. If left empty or set to false it will not be used.
+
+The healthcheck itself has to be configured within docker, e.g. via
+HEALTHCHECK in Dockerfile. This option just queries in what condition
+docker considers the container to be and lets ocf do its thing accordingly.
+
+Note that the time a container is in "starting" state counts against the
+monitor timeout.
+
+This is an additional check besides the standard check for the container
+to be running, and the optional monitor_cmd check. It doesn't disable or
+override them, so all of them (if used) have to come back healthy for the
+container to be considered healthy.
+</longdesc>
+<shortdesc lang="en">use healthcheck</shortdesc>
 <content type="boolean"/>
 </parameter>
 
@@ -249,6 +279,46 @@ docker_simple_status()
 	return $OCF_NOT_RUNNING
 }
 
+docker_health_status()
+{
+
+	if ocf_is_true "$OCF_RESKEY_query_docker_health"; then
+                local val
+
+                container_exists
+                if [ $? -ne 0 ]; then
+                        return $OCF_NOT_RUNNING
+                fi
+
+                # retrieve the 'Health' attribute for the container
+                # This is a bash-style do-while loop to wait until instance is started.
+                # if starting takes longer than monitor timeout then upstream will make this fail.
+                while
+
+                        val=$(docker inspect --format {{.State.Health.Status}} $CONTAINER 2>/dev/null)
+                        if [ $? -ne 0 ]; then
+                                #not healthy as a result of container not being found
+                                return $OCF_NOT_RUNNING
+                        fi
+                        test "$val" = "starting"
+                do
+
+                        sleep 1
+                done
+
+                if [ "$val" = "healthy" ]; then
+                        # container exists and is healthy
+                        return $OCF_SUCCESS
+                fi
+
+                return $OCF_NOT_RUNNING
+	fi
+
+	return 0
+}
+
+
+
 docker_monitor()
 {
 	local rc=0
@@ -260,11 +330,28 @@ docker_monitor()
 		return $rc
 	fi
 
+	docker_health_status
+	rc=$?
+
+	if [ $rc -ne 0 ]; then
+		return $rc
+	fi
+
 	monitor_cmd_exec
+}
+
+docker_create_mounts() {
+	oldIFS="$IFS"
+	IFS=","
+	for directory in $OCF_RESKEY_mount_points; do
+		mkdir -p "$directory"
+	done
+	IFS="$oldIFS"
 }
 
 docker_start()
 {
+	docker_create_mounts
 	local run_opts="-d --name=${CONTAINER}"
 	# check to see if the container has already started
 	docker_simple_status
@@ -360,24 +447,31 @@ docker_stop()
 
 image_exists()
 {
-	# assume that OCF_RESKEY_name have been validated
-	local IMAGE_NAME="$(echo ${OCF_RESKEY_image} | awk -F':' '{print $1}')"
-
 	# if no tag was specified, use default "latest"
 	local COLON_FOUND=0
+	local SLASH_FOUND=0
+	local SERVER_NAME=""
+	local IMAGE_NAME="${OCF_RESKEY_image}"
 	local IMAGE_TAG="latest"
 
-	COLON_FOUND="$(echo "${OCF_RESKEY_image}" | grep -o ':' | grep -c .)"
+	SLASH_FOUND="$(echo "${OCF_RESKEY_image}" | grep -o '/' | grep -c .)"
 
-	if [ ${COLON_FOUND} -ne 0 ]; then
-		IMAGE_TAG="$(echo ${OCF_RESKEY_image} | awk -F':' '{print $NF}')"
+	if [ ${SLASH_FOUND} -ge 1 ]; then
+		SERVER_NAME="$(echo ${IMAGE_NAME} | cut -d / -f 1-${SLASH_FOUND})"
+		IMAGE_NAME="$(echo ${IMAGE_NAME} | awk -F'/' '{print $NF}')"
+	fi
+
+	COLON_FOUND="$(echo "${IMAGE_NAME}" | grep -o ':' | grep -c .)"
+	if [ ${COLON_FOUND} -ge 1 ]; then
+		IMAGE_TAG="$(echo ${IMAGE_NAME} | awk -F':' '{print $NF}')"
+		IMAGE_NAME="$(echo ${IMAGE_NAME} | cut -d : -f 1-${COLON_FOUND})"
 	fi
 
 	# IMAGE_NAME might be following formats:
 	# - image
-	# - repository/image
+	# - repository:port/image
 	# - docker.io/image (some distro will display "docker.io/" as prefix)
-	docker images | awk '{print $1 ":" $2}' | egrep -q -s "^(docker.io\/)?${IMAGE_NAME}:${IMAGE_TAG}\$"
+	docker images | awk '{print $1 ":" $2}' | egrep -q -s "^(docker.io\/|${SERVER_NAME}\/)?${IMAGE_NAME}:${IMAGE_TAG}\$"
 	if [ $? -eq 0 ]; then
 		# image found
 		return 0

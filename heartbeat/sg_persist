@@ -83,7 +83,7 @@ Master reservs all devices from "devs" list with reservation "--prout-type" valu
 <longdesc lang="en">
 The name of the binary that manages the resource.
 </longdesc>
-<shortdesc>the binary name of the resource</shortdesc>
+<shortdesc lang="en">the binary name of the resource</shortdesc>
 <content type="string" default="$sg_persist_binary"/>
 </parameter>
 
@@ -415,10 +415,10 @@ sg_persist_action_stop() {
 
 sg_persist_action_monitor() {
 
-    ACT_MASTER_SCORE=`$MASTER_SCORE_ATTRIBUTE --query --quiet 2>&1`
+    ACT_MASTER_SCORE=`$MASTER_SCORE_ATTRIBUTE --query --quiet 2>/dev/null`
     ocf_log debug "$RESOURCE monitor: ACT_MASTER_SCORE=$ACT_MASTER_SCORE"
     
-    ACT_PENDING=`$PENDING_ATTRIBUTE --query --quiet 2>&1`
+    ACT_PENDING=`$PENDING_ATTRIBUTE --query --quiet 2>/dev/null`
     ocf_log debug "$RESOURCE monitor: ACT_PENDING=$ACT_PENDING"
 
     sg_persist_parse_act_pending

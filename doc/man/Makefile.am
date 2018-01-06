@@ -69,10 +69,12 @@ man_MANS	       = ocf_heartbeat_AoEtarget.7 \
                           ocf_heartbeat_IPaddr2.7 \
                           ocf_heartbeat_IPsrcaddr.7 \
                           ocf_heartbeat_LVM.7 \
+                          ocf_heartbeat_LVM-activate.7 \
                           ocf_heartbeat_LinuxSCSI.7 \
                           ocf_heartbeat_MailTo.7 \
                           ocf_heartbeat_ManageRAID.7 \
                           ocf_heartbeat_ManageVE.7 \
+                          ocf_heartbeat_NodeUtilization.7 \
                           ocf_heartbeat_Pure-FTPd.7 \
                           ocf_heartbeat_Raid1.7 \
                           ocf_heartbeat_Route.7 \
@@ -94,6 +96,11 @@ man_MANS	       = ocf_heartbeat_AoEtarget.7 \
                           ocf_heartbeat_anything.7 \
                           ocf_heartbeat_apache.7 \
                           ocf_heartbeat_asterisk.7 \
+                          ocf_heartbeat_aws-vpc-move-ip.7 \
+                          ocf_heartbeat_aws-vpc-route53.7 \
+                          ocf_heartbeat_awseip.7 \
+                          ocf_heartbeat_awsvip.7 \
+                          ocf_heartbeat_azure-lb.7 \
                           ocf_heartbeat_clvm.7 \
                           ocf_heartbeat_conntrackd.7 \
                           ocf_heartbeat_db2.7 \
@@ -110,11 +117,16 @@ man_MANS	       = ocf_heartbeat_AoEtarget.7 \
                           ocf_heartbeat_iSCSITarget.7 \
                           ocf_heartbeat_iface-bridge.7 \
                           ocf_heartbeat_iface-vlan.7 \
+                          ocf_heartbeat_ipsec.7 \
                           ocf_heartbeat_ids.7 \
                           ocf_heartbeat_iscsi.7 \
                           ocf_heartbeat_jboss.7 \
+                          ocf_heartbeat_jira.7 \
                           ocf_heartbeat_kamailio.7 \
+                          ocf_heartbeat_lvmlockd.7 \
                           ocf_heartbeat_lxc.7 \
+                          ocf_heartbeat_lxd-info.7 \
+                          ocf_heartbeat_machine-info.7 \
                           ocf_heartbeat_mysql.7 \
                           ocf_heartbeat_mysql-proxy.7 \
                           ocf_heartbeat_nagios.7 \
@@ -122,6 +134,7 @@ man_MANS	       = ocf_heartbeat_AoEtarget.7 \
                           ocf_heartbeat_nfsnotify.7 \
                           ocf_heartbeat_nfsserver.7 \
                           ocf_heartbeat_nginx.7 \
+                          ocf_heartbeat_oraasm.7 \
                           ocf_heartbeat_oracle.7 \
                           ocf_heartbeat_oralsnr.7 \
                           ocf_heartbeat_pgsql.7 \

@@ -37,7 +37,7 @@ RMQ_DATA_DIR="/var/lib/rabbitmq/mnesia"
 RMQ_PID_DIR="/var/run/rabbitmq"
 RMQ_PID_FILE="/var/run/rabbitmq/rmq.pid"
 RMQ_LOG_DIR="/var/log/rabbitmq"
-NODENAME=$(ocf_local_nodename)
+NODENAME=$(ocf_attribute_target)
 
 # this attr represents the current active local rmq node name.
 # when rmq stops or the node is fenced, this attr disappears
@@ -52,11 +52,13 @@ meta_data() {
 	cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
-<resource-agent name="rabbitmq-cluster" version="0.9">
+<resource-agent name="rabbitmq-cluster">
 <version>1.0</version>
 
 <longdesc lang="en">
-Starts cloned rabbitmq cluster instance
+Starts cloned rabbitmq cluster instance. NB: note that this RA
+cannot be spawned across a mix of pacemaker and pacemaker-remote nodes.
+Only on pacemaker *or* pacemaker-remote nodes exclusively.
 </longdesc>
 <shortdesc lang="en">rabbitmq clustered</shortdesc>
 
@@ -100,7 +102,7 @@ rmq_wipe_data()
 rmq_local_node()
 {
 
-	local node_name=$(rabbitmqctl status 2>&1 | sed -n -e "s/^.*[S|s]tatus of node \(.*\)\s.*$/\1/p" | tr -d "'")
+	local node_name=$($RMQ_CTL status 2>&1 | sed -n -e "s/^.*[S|s]tatus of node \(.*\)\s.*$/\1/p" | tr -d "'")
 
 	if [ -z "$node_name" ]; then
 		node_name=$(cat /etc/rabbitmq/rabbitmq-env.conf 2>/dev/null | grep "\s*RABBITMQ_NODENAME=" | awk -F= '{print $2}')
@@ -111,7 +113,25 @@ rmq_local_node()
 
 rmq_join_list()
 {
-    cibadmin -Q --xpath "//node_state[@crmd='online']//nvpair[@name='$RMQ_CRM_ATTR_COOKIE']" | grep "$RMQ_CRM_ATTR_COOKIE" | sed -n -e "s/^.*value=.\(.*\)\".*$/\1/p"
+	local join_list=$(cibadmin -Q --xpath "//node_state[@crmd='online']//nvpair[@name='$RMQ_CRM_ATTR_COOKIE']" | grep "$RMQ_CRM_ATTR_COOKIE" | sed -n -e "s/^.*value=.\(.*\)\".*$/\1/p")
+	# If join_list is empty we want to check if there are any remote nodes
+	# where rabbitmq is allowed to run (i.e. nodes without the crmd=online selector)
+	if [ -z "$join_list" ]; then
+		# Get all the nodes written in the ATTR_COOKIE no matter if
+		# they are online or not. This will be one line per node like
+		# rabbit@overcloud-rabbit-0
+		# rabbit@overcloud-rabbit-1
+		# ...
+		local remote_join_list=$(cibadmin -Q --xpath "//node_state//nvpair[@name='$RMQ_CRM_ATTR_COOKIE']" | grep "$RMQ_CRM_ATTR_COOKIE" | sed -n -e "s/^.*value=.\(.*\)\".*$/\1/p")
+		# The following expression prepares a filter like '-e overcloud-rabbit-0 -e overcloud-rabbit-1 -e ...'
+		local filter=$(crm_mon -r --as-xml | xmllint --format --xpath "//nodes//node[@online='true' and @standby='false']/@name" - | xargs -n1 echo | awk -F= '{print "-e "$2}')
+		# export the intersection which gives us only the nodes that
+		# a) wrote their namein the cib attrd
+		# b) run on nodes where pacemaker_remote is enabled
+		join_list="$(echo $remote_join_list | grep $filter)"
+	fi
+
+	echo $join_list
 }
 
 rmq_write_nodename()
@@ -290,7 +310,7 @@ rmq_forget_cluster_node_remotely() {
 
 	ocf_log info "Forgetting $node_to_forget via nodes [ $(echo $running_cluster_nodes | tr '\n' ' ') ]."
 	for running_cluster_node in $running_cluster_nodes; do
-		rabbitmqctl -n $running_cluster_node forget_cluster_node $node_to_forget
+		$RMQ_CTL -n $running_cluster_node forget_cluster_node $node_to_forget
 		if [ $? = 0 ]; then
 			ocf_log info "Succeeded forgetting $node_to_forget via $running_cluster_node."
 			return
@@ -320,7 +340,7 @@ rmq_notify() {
 
 	# forget each stopped rmq instance in the provided pcmk node in the list.
 	for node in $(echo "$node_list"); do
-		local rmq_node="$(${HA_SBIN_DIR}/crm_attribute -N $node -l forever --query --name $RMQ_CRM_ATTR_COOKIE_LAST_KNOWN -q)"
+		local rmq_node="$(${HA_SBIN_DIR}/crm_attribute -N $(ocf_attribute_target $node) -l forever --query --name $RMQ_CRM_ATTR_COOKIE_LAST_KNOWN -q)"
 		if [ -z "$rmq_node" ]; then
 			ocf_log warn "Unable to map pcmk node $node to a known rmq node."
 			continue	
@@ -353,102 +373,107 @@ rmq_start() {
 		return $rc
 	fi
 
-	# first try to join without wiping mnesia data
+	# Try to join existing cluster
+	ocf_log info "wiping data directory before joining"
+	local local_rmq_node="$(${HA_SBIN_DIR}/crm_attribute -N $NODENAME -l forever --query --name $RMQ_CRM_ATTR_COOKIE_LAST_KNOWN -q)"
+
+	rmq_stop
+	rmq_wipe_data
+	rmq_forget_cluster_node_remotely "$join_list" "$local_rmq_node"
 	rmq_join_existing "$join_list"
-	if [ $? -ne 0 ]; then
-		ocf_log info "node failed to join, wiping data directory and trying again"
-		local local_rmq_node="$(${HA_SBIN_DIR}/crm_attribute -N $NODENAME -l forever --query --name $RMQ_CRM_ATTR_COOKIE_LAST_KNOWN -q)"
+	rc=$?
 
-		# if the graceful join fails, use the hammer and reset all the data.
-		rmq_stop 
-		rmq_wipe_data
-		rmq_forget_cluster_node_remotely "$join_list" "$local_rmq_node"
-		rmq_join_existing "$join_list"
-		rc=$?
-
-		# Restore users and users' permissions (if any)
-		BaseDataDir=`dirname $RMQ_DATA_DIR`
-		if [ -f $BaseDataDir/users.erl ] ; then
-			rabbitmqctl eval "
-				%% Run only if Mnesia is ready.
-				lists:any(fun({mnesia,_,_}) -> true; ({_,_,_}) -> false end, application:which_applications()) andalso
-				begin
-					[WildPattern] = ets:select(mnesia_gvar, [ { {{rabbit_user, wild_pattern}, '\\\$1'}, [], ['\\\$1'] } ]),
-
-					%% Read users first
-					{ok, [Users]} = file:consult(\"$BaseDataDir/users.erl\"),
-
-					Upgrade = fun
-						({internal_user, A, B, C}) -> {internal_user, A, B, C, rabbit_password_hashing_md5};
-						({internal_user, A, B, C, D}) -> {internal_user, A, B, C, D}
-					end,
-
-					Downgrade = fun
-						({internal_user, A, B, C}) -> {internal_user, A, B, C};
-						({internal_user, A, B, C, rabbit_password_hashing_md5}) -> {internal_user, A, B, C};
-						%% Incompatible scheme, so we will loose user's password ('B' value) during conversion.
-						%% Unfortunately, this case will require manual intervention - user have to run:
-						%%    rabbitmqctl change_password <A> <somenewpassword>
-						({internal_user, A, B, C, _}) -> {internal_user, A, B, C}
-					end,
-
-					case WildPattern of
-						%% Version < 3.6.0
-						{internal_user,'_','_','_'} ->
-							lists:foreach(fun(X) -> mnesia:dirty_write(rabbit_user, Downgrade(X)) end, Users);
-						%% Version >= 3.6.0
-						{internal_user,'_','_','_','_'} ->
-							lists:foreach(fun(X) -> mnesia:dirty_write(rabbit_user, Upgrade(X)) end, Users)
-					end,
-
-					ok = file:delete(\"$BaseDataDir/users.erl\")
-				end.
-			"
-                fi
-                if [ -f $BaseDataDir/users_perms.erl ] ; then
-                        rabbitmqctl eval "
-				%% Run only if Mnesia is ready.
-				lists:any(fun({mnesia,_,_}) -> true; ({_,_,_}) -> false end, application:which_applications()) andalso
-				begin
-					{ok, [UsersPerms]} = file:consult(\"$BaseDataDir/users_perms.erl\"),
-					lists:foreach(fun(X) -> mnesia:dirty_write(rabbit_user_permission, X) end, UsersPerms),
-
-					ok = file:delete(\"$BaseDataDir/users_perms.erl\")
-				end.
-                        "
-                fi
-
-		if [ $rc -ne 0 ]; then
-			ocf_log info "node failed to join even after reseting local data. Check SELINUX policy"
-			return $OCF_ERR_GENERIC
-		fi
+	if [ $rc -ne 0 ]; then
+		ocf_log info "node failed to join even after reseting local data. Check SELINUX policy"
+		return $OCF_ERR_GENERIC
 	fi
 
+	# Restore users, user permissions, and policies (if any)
+	BaseDataDir=`dirname $RMQ_DATA_DIR`
+	$RMQ_CTL eval "
+		%% Run only if Mnesia is ready.
+		lists:any(fun({mnesia,_,_}) -> true; ({_,_,_}) -> false end, application:which_applications()) andalso
+		begin
+			Restore = fun(Table, PostprocessFun, Filename) ->
+				case file:consult(Filename) of
+					{error, _} ->
+						ok;
+					{ok, [Result]} ->
+						lists:foreach(fun(X) -> mnesia:dirty_write(Table, PostprocessFun(X)) end, Result),
+						file:delete(Filename)
+				end
+			end,
+
+			%% Restore users
+
+			Upgrade = fun
+				({internal_user, A, B, C}) -> {internal_user, A, B, C, rabbit_password_hashing_md5};
+				({internal_user, A, B, C, D}) -> {internal_user, A, B, C, D}
+			end,
+
+			Downgrade = fun
+				({internal_user, A, B, C}) -> {internal_user, A, B, C};
+				({internal_user, A, B, C, rabbit_password_hashing_md5}) -> {internal_user, A, B, C};
+				%% Incompatible scheme, so we will loose user's password ('B' value) during conversion.
+				%% Unfortunately, this case will require manual intervention - user have to run:
+				%%    rabbitmqctl change_password <A> <somenewpassword>
+				({internal_user, A, B, C, _}) -> {internal_user, A, B, C}
+			end,
+
+			%% Check db scheme first
+			[WildPattern] = ets:select(mnesia_gvar, [ { {{rabbit_user, wild_pattern}, '\\\$1'}, [], ['\\\$1'] } ]),
+			case WildPattern of
+				%% Version < 3.6.0
+				{internal_user,'_','_','_'} ->
+					Restore(rabbit_user, Downgrade, \"$BaseDataDir/users.erl\");
+				%% Version >= 3.6.0
+				{internal_user,'_','_','_','_'} ->
+					Restore(rabbit_user, Upgrade, \"$BaseDataDir/users.erl\")
+			end,
+
+			NoOp = fun(X) -> X end,
+
+			%% Restore user permissions
+			Restore(rabbit_user_permission, NoOp, \"$BaseDataDir/users_perms.erl\"),
+
+			%% Restore policies
+			Restore(rabbit_runtime_parameters, NoOp, \"$BaseDataDir/policies.erl\")
+		end.
+	"
 	return $OCF_SUCCESS
 }
 
 rmq_stop() {
-	# Backup users and users' permissions
+	# Backup users, user permissions, and policies
 	BaseDataDir=`dirname $RMQ_DATA_DIR`
-	rabbitmqctl eval "
+	$RMQ_CTL eval "
 		%% Run only if Mnesia is still available.
 		lists:any(fun({mnesia,_,_}) -> true; ({_,_,_}) -> false end, application:which_applications()) andalso
 		begin
-			[WildPattern] = ets:select(mnesia_gvar, [ { {{rabbit_user, wild_pattern}, '\\\$1'}, [], ['\\\$1'] } ]),
-
-			Users = case WildPattern of
-				%% Version < 3.6.0
-				{internal_user,'_','_','_'} ->
-					mnesia:dirty_select(rabbit_user, [{ {internal_user, '\\\$1', '_', '_'}, [{'/=', '\\\$1', <<\"guest\">>}], ['\\\$_'] } ]);
-				%% Version >= 3.6.0
-				{internal_user,'_','_','_','_'} ->
-					mnesia:dirty_select(rabbit_user, [{ {internal_user, '\\\$1', '_', '_', '_'}, [{'/=', '\\\$1', <<\"guest\">>}], ['\\\$_'] } ])
+			Backup = fun(Table, SelectPattern, Filter, Filename) ->
+				Result = case catch mnesia:dirty_select(Table, [{SelectPattern, [Filter], ['\\\$_']}]) of
+					{'EXIT', _} -> [];
+					Any -> Any
+				end,
+				Result /= [] andalso file:write_file(Filename, io_lib:fwrite(\"~p.~n\", [Result]))
 			end,
 
-			Users /= [] andalso file:write_file(\"$BaseDataDir/users.erl\", io_lib:fwrite(\"~p.~n\", [Users])),
+			%% Backup users
+			%% Check db scheme first
+			[WildPattern] = ets:select(mnesia_gvar, [ { {{rabbit_user, wild_pattern}, '\\\$1'}, [], ['\\\$1'] } ]),
+			UsersSelectPattern = case WildPattern of
+				%% Version < 3.6.0
+				{internal_user,'_','_','_'} -> {internal_user, '\\\$1', '_', '_'};
+				%% Version >= 3.6.0
+				{internal_user,'_','_','_','_'} -> {internal_user, '\\\$1', '_', '_', '_'}
+			end,
+			Backup(rabbit_user, UsersSelectPattern, {'/=', '\\\$1', <<\"guest\">>}, \"$BaseDataDir/users.erl\"),
 
-			UsersPerms = mnesia:dirty_select(rabbit_user_permission, [{{'\\\$1', {'\\\$2', '\\\$3','\\\$4'}, '\\\$5'}, [{'/=', '\\\$3', <<\"guest\">>}], ['\\\$_']}]),
-			UsersPerms /= [] andalso file:write_file(\"$BaseDataDir/users_perms.erl\", io_lib:fwrite(\"~p.~n\", [UsersPerms]))
+			%% Backup user permissions
+			Backup(rabbit_user_permission, {'\\\$1', {'\\\$2', '\\\$3','\\\$4'}, '\\\$5'}, {'/=', '\\\$3', <<\"guest\">>}, \"$BaseDataDir/users_perms.erl\"),
+
+			%% Backup policies
+			Backup(rabbit_runtime_parameters, {runtime_parameters, {'_', '\\\$1', '_'}, '_'}, {'==', '\\\$1', <<\"policy\">>}, \"$BaseDataDir/policies.erl\")
 		end.
 	"
 

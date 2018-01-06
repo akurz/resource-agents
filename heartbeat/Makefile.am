@@ -30,7 +30,7 @@ halibdir		= $(libexecdir)/heartbeat
 ocfdir		        = $(OCF_RA_DIR_PREFIX)/heartbeat
 
 dtddir			= $(datadir)/$(PACKAGE_NAME)
-dtd_DATA		= ra-api-1.dtd
+dtd_DATA		= ra-api-1.dtd metadata.rng
 
 if USE_IPV6ADDR_AGENT
 ocf_PROGRAMS           = IPv6addr
@@ -65,9 +65,12 @@ ocf_SCRIPTS	     =  AoEtarget		\
 			IPsrcaddr		\
 			LVM			\
 			LinuxSCSI		\
+			lvmlockd		\
+			LVM-activate		\
 			MailTo			\
 			ManageRAID		\
 			ManageVE		\
+			NodeUtilization	\
 			Pure-FTPd		\
 			Raid1			\
 			Route			\
@@ -86,11 +89,15 @@ ocf_SCRIPTS	     =  AoEtarget		\
 			WinPopup		\
 			Xen			\
 			Xinetd			\
+			ZFS			\
 			anything		\
 			apache			\
 			asterisk		\
+			aws-vpc-move-ip		\
+			aws-vpc-route53		\
 			awseip			\
 			awsvip			\
+			azure-lb		\
 			clvm			\
 			conntrackd		\
 			db2			\
@@ -108,10 +115,15 @@ ocf_SCRIPTS	     =  AoEtarget		\
 			ids			\
 			iface-bridge		\
 			iface-vlan		\
+			ipsec		\
 			iscsi			\
 			jboss			\
+			jira			\
 			kamailio		\
 			lxc			\
+			lxd-info		\
+			machine-info	\
+			minio			\
 			mysql			\
 			mysql-proxy		\
 			nagios			\
@@ -119,8 +131,10 @@ ocf_SCRIPTS	     =  AoEtarget		\
 			nfsnotify		\
 			nfsserver		\
 			nginx			\
+			oraasm			\
 			oracle			\
 			oralsnr			\
+			ovsmonitor		\
 			pgagent			\
 			pgsql			\
 			pingd			\
@@ -130,6 +144,7 @@ ocf_SCRIPTS	     =  AoEtarget		\
 			proftpd			\
 			rabbitmq-cluster	\
 			redis			\
+			rkt			\
 			rsyncd			\
 			rsyslog			\
 			scsi2reservation	\
@@ -149,12 +164,15 @@ ocfcommon_DATA		= ocf-shellfuncs 	\
 			  ocf-binaries	 	\
 			  ocf-directories 	\
 			  ocf-returncodes 	\
- 			  ocf-rarun		\
- 			  ocf-distro		\
+			  ocf-rarun		\
+			  ocf-distro		\
 			  apache-conf.sh 	\
-			  http-mon.sh    	\
+			  http-mon.sh		\
 			  sapdb-nosha.sh	\
 			  sapdb.sh		\
+			  lvm-clvm.sh       \
+			  lvm-plain.sh      \
+			  lvm-tag.sh        \
 			  ora-common.sh		\
 			  mysql-common.sh	\
 			  nfsserver-redhat.sh	\
@@ -163,3 +181,8 @@ ocfcommon_DATA		= ocf-shellfuncs 	\
 # Legacy locations
 hbdir			= $(sysconfdir)/ha.d
 hb_DATA			= shellfuncs
+
+check: $(ocf_SCRIPTS:=.check)
+
+%.check: %
+	OCF_ROOT=$(abs_srcdir) OCF_FUNCTIONS_DIR=$(abs_srcdir) ./$< meta-data | xmllint --path $(abs_srcdir) --noout --relaxng $(abs_srcdir)/metadata.rng -

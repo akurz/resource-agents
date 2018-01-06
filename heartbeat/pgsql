@@ -299,7 +299,7 @@ It requires master_ip restore_command parameters.
 <parameter name="node_list" unique="0" required="0">
 <longdesc lang="en">
 All node names. Please separate each node name with a space.
-This is required for replication.
+This is optional for replication. Defaults to all nodes in the cluster
 </longdesc>
 <shortdesc lang="en">node list</shortdesc>
 <content type="string" default="${OCF_RESKEY_node_list_default}" />
@@ -377,8 +377,7 @@ This is optional for replication.
 Set this option when using replication slots.
 Can only use lower case letters, numbers and underscore for replication_slot_name.
 
-When the master node has 1 slave node,one replication slot would be created with the name "replication_slot_name".
-When the master node has 2 or more slave nodes,the replication slots would be created for each node, with the name adding the node name as postfix.
+The replication slots would be created for each node, with the name adding the node name as postfix.
 For example, replication_slot_name is "sample" and 2 slaves which are "node1" and "node2" connect to
 their slots, the slots names are "sample_node1" and "sample_node2".
 If the node name contains a upper case letter, hyphen and dot, those characters will be converted to a lower case letter or an underscore.
@@ -408,6 +407,10 @@ This is optional for replication.
 <longdesc lang="en">
 Number of checks of xlog on monitor before promote.
 This is optional for replication.
+
+Note: For backward compatibility, the terms are unified with PostgreSQL 9.
+      If you are using PostgreSQL 10 or later, replace "xlog" with "wal".
+      Likewise, replacing "location" with "lsn".
 </longdesc>
 <shortdesc lang="en">xlog check count</shortdesc>
 <content type="integer" default="${OCF_RESKEY_xlog_check_count_default}" />
@@ -594,7 +597,7 @@ pgsql_real_start() {
     pgctl_options="$pgctl_options -o '$postgres_options'"
 
     # Invoke pg_ctl
-    runasowner "unset PGUSER; unset PGPASSWORD; $OCF_RESKEY_pgctl $pgctl_options start"
+    runasowner "unset PGUSER; unset PGPASSWORD; $OCF_RESKEY_pgctl $pgctl_options -W start"
 
     if [ $? -eq 0 ]; then
         # Probably started.....
@@ -615,12 +618,11 @@ pgsql_real_start() {
         ocf_log debug "PostgreSQL still hasn't started yet. Waiting..."
     done
 
-    # create replication slot on the master and slave nodes.
-    # creating slot on the slave node is in preparation for failover.
+    # delete replication slots on all nodes. On master node will be created during promotion.
     if use_replication_slot; then
-        create_replication_slot
+        delete_replication_slots
         if [ $? -eq $OCF_ERR_GENERIC ]; then
-            ocf_exit_reason "PostgreSQL can't create replication_slot."
+            ocf_exit_reason "PostgreSQL can't clean up replication_slot."
             return $OCF_ERR_GENERIC
         fi
     fi
@@ -687,6 +689,15 @@ pgsql_promote() {
     touch $PGSQL_LOCK
     show_master_baseline
 
+    # create replication slots on master before promotion
+    if use_replication_slot; then
+        create_replication_slots
+        if [ $? -eq $OCF_ERR_GENERIC ]; then
+            ocf_exit_reason "PostgreSQL can't create replication_slot."
+            return $OCF_ERR_GENERIC
+        fi
+    fi
+
     if ocf_is_true ${OCF_RESKEY_restart_on_promote}; then
         ocf_log info "Restarting PostgreSQL instead of promote."
         #stop : this function returns $OCF_SUCCESS only.
@@ -702,7 +713,7 @@ pgsql_promote() {
             return $OCF_ERR_GENERIC
         fi
     else
-        runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata promote"
+        runasowner "$OCF_RESKEY_pgctl -D $OCF_RESKEY_pgdata -W promote"
         if [ $? -eq 0 ]; then
             ocf_log info "PostgreSQL promote command sent."
         else
@@ -1063,8 +1074,13 @@ pgsql_pre_promote() {
             cmp_location=`printf "$master_baseline\n$my_master_baseline\n" |\
                           sort | head -1`
             if [ "$cmp_location" != "$my_master_baseline" ]; then
+                # We used to set the failcount to INF for the resource here in
+                # order to move the master to the other node. However, setting
+                # the failcount should be done only by the CRM and so this use
+                # got deprecated in pacemaker version 1.1.17. Now we do the
+                # "ban resource from the node".
                 ocf_exit_reason "My data is newer than new master's one. New master's location : $master_baseline"
-                exec_with_retry 0 $CRM_FAILCOUNT -r $OCF_RESOURCE_INSTANCE -U $NODENAME -v INFINITY
+                exec_with_retry 0 $CRM_RESOURCE -B -r $OCF_RESOURCE_INSTANCE -N $NODENAME -Q
                 return $OCF_ERR_GENERIC
             fi
         fi
@@ -1321,12 +1337,9 @@ create_replication_slot_name() {
         number_of_nodes=`echo $NODE_LIST | wc -w`
     fi
 
-    # If the number of nodes 2 or less, Master node has 1 or less Slave node.
-    # The Master node should have 1 slot for the Slave, which is named "$OCF_RES_KEY_replication_slot_name".
-    if [ $number_of_nodes -le 2 ]; then
-        replication_slot_name_list="$OCF_RESKEY_replication_slot_name"
+    if [ $number_of_nodes -le 0 ]; then
+        replication_slot_name_list=""
 
-    # If the number of nodes 3 or more, the Master has some Slave nodes.
     # The Master node should have some slots equal to the number of Slaves, and
     # the Slave nodes connect to their dedicated slot on the Master.
     # To ensuring that the slots name are each unique, add postfix to $OCF_RESKEY_replication_slot.
@@ -1348,7 +1361,34 @@ create_replication_slot_name() {
     echo $replication_slot_name_list
 }
 
-create_replication_slot() {
+delete_replication_slot(){
+    DELETE_REPLICATION_SLOT_sql="SELECT pg_drop_replication_slot('$1');"
+    output=`exec_sql "$DELETE_REPLICATION_SLOT_sql"`
+    return $?
+}
+
+delete_replication_slots() {
+    local replication_slot_name_list
+    local replication_slot_name
+
+    replication_slot_name_list=`create_replication_slot_name`
+    ocf_log debug "replication slot names are $replication_slot_name_list."
+
+    for replication_slot_name in $replication_slot_name_list
+    do
+        if [ `check_replication_slot $replication_slot_name` = "1" ]; then
+            delete_replication_slot $replication_slot_name
+            if [ $? -eq 0 ]; then
+                ocf_log info "PostgreSQL delete the replication slot($replication_slot_name)."
+            else
+                ocf_exit_reason "$output"
+                return $OCF_ERR_GENERIC
+            fi
+        fi
+    done
+}
+
+create_replication_slots() {
     local replication_slot_name
     local replication_slot_name_list
     local output
@@ -1363,11 +1403,8 @@ create_replication_slot() {
     do
         # If the same name slot is already exists, initialize(delete and create) the slot.
         if [ `check_replication_slot $replication_slot_name` = "1" ]; then
-            DELETE_REPLICATION_SLOT_sql="SELECT pg_drop_replication_slot('$replication_slot_name');"
-            output=`exec_sql "$DELETE_REPLICATION_SLOT_sql"`
-            rc=$?
-
-            if [ $rc -eq 0 ]; then
+            delete_replication_slot $replication_slot_name
+            if [ $? -eq 0 ]; then
                 ocf_log info "PostgreSQL delete the replication slot($replication_slot_name)."
             else
                 ocf_exit_reason "$output"
@@ -1400,6 +1437,7 @@ check_replication_slot(){
     echo "$output"
 }
 
+# On postgreSQL 10 or later, "location" means "lsn".
 get_my_location() {
     local rc
     local output
@@ -1438,6 +1476,7 @@ get_my_location() {
     return 0
 }
 
+# On postgreSQL 10 or later, "xlog_location" means "wal_lsn".
 show_xlog_location() {
     local location
 
@@ -1445,6 +1484,7 @@ show_xlog_location() {
     exec_with_retry 0 $CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_XLOG_LOC_NAME" -v "$location"
 }
 
+# On postgreSQL 10 or later, "xlog_location" means "wal_lsn".
 delete_xlog_location() {
     exec_with_retry 5 $CRM_ATTR_REBOOT -N "$NODENAME" -n "$PGSQL_XLOG_LOC_NAME" -D
 }
@@ -1474,7 +1514,7 @@ set_async_mode_all() {
 }
 
 set_async_mode() {
-    cat $REP_MODE_CONF |  grep -q -e "[,' ]$1[,' ]"
+    cat $REP_MODE_CONF |  grep -q -E "(\"$1\")|([,' ]$1[,' ])"
     if [ $? -eq 0 ]; then
         ocf_log info "Setup $1 into async mode."
         runasowner -q err "echo \"synchronous_standby_names = ''\" > \"$REP_MODE_CONF\""
@@ -1493,7 +1533,7 @@ set_sync_mode() {
         ocf_log debug "$sync_node_in_conf is already sync mode."
     else
         ocf_log info "Setup $1 into sync mode."
-        runasowner -q err "echo \"synchronous_standby_names = '$1'\" > \"$REP_MODE_CONF\""
+        runasowner -q err "echo \"synchronous_standby_names = '\\\"$1\\\"'\" > \"$REP_MODE_CONF\""
         [ "$RE_CONTROL_SLAVE" = "false" ] && RE_CONTROL_SLAVE="true"
         exec_with_retry 0 reload_conf
     fi
@@ -1513,7 +1553,6 @@ reload_conf() {
 }
 
 user_recovery_conf() {
-    local number_of_nodes
     local nodename_tmp
 
     # put archive_cleanup_command and recovery_end_command only when defined by user
@@ -1525,13 +1564,8 @@ user_recovery_conf() {
     fi
 
     if use_replication_slot; then
-        number_of_nodes=`echo $NODE_LIST | wc -w`
-        if [ $number_of_nodes -le 2 ]; then
-            echo "primary_slot_name = '${OCF_RESKEY_replication_slot_name}'"
-        else
-            nodename_tmp=`echo "$NODENAME" | tr 'A-Z.-' 'a-z__'`
-            echo "primary_slot_name = '${OCF_RESKEY_replication_slot_name}_$nodename_tmp'"
-        fi
+        nodename_tmp=`echo "$NODENAME" | tr 'A-Z.-' 'a-z__'`
+        echo "primary_slot_name = '${OCF_RESKEY_replication_slot_name}_$nodename_tmp'"
     fi
 }
 
@@ -1835,6 +1869,36 @@ pgsql_validate_all() {
     fi
 
     if is_replication; then
+        REP_MODE_CONF=${OCF_RESKEY_tmpdir}/rep_mode.conf
+        PGSQL_LOCK=${OCF_RESKEY_tmpdir}/PGSQL.lock
+        XLOG_NOTE_FILE=${OCF_RESKEY_tmpdir}/xlog_note
+
+        CRM_MASTER="${HA_SBIN_DIR}/crm_master -l reboot"
+        CRM_ATTR_REBOOT="${HA_SBIN_DIR}/crm_attribute -l reboot"
+        CRM_ATTR_FOREVER="${HA_SBIN_DIR}/crm_attribute -l forever"
+        CRM_RESOURCE="${HA_SBIN_DIR}/crm_resource"
+
+        CAN_NOT_PROMOTE="-INFINITY"
+        CAN_PROMOTE="100"
+        PROMOTE_ME="1000"
+
+        CHECK_MS_SQL="select pg_is_in_recovery()"
+        ocf_version_cmp "$version" "10"
+        if [ $? -eq 1 ] || [ $? -eq 2 ]; then
+            CHECK_XLOG_LOC_SQL="select pg_last_wal_replay_lsn(),pg_last_wal_receive_lsn()"
+        else
+            CHECK_XLOG_LOC_SQL="select pg_last_xlog_replay_location(),pg_last_xlog_receive_location()"
+        fi
+        CHECK_REPLICATION_STATE_SQL="select application_name,upper(state),upper(sync_state) from pg_stat_replication"
+
+        PGSQL_STATUS_ATTR="${RESOURCE_NAME}-status"
+        PGSQL_DATA_STATUS_ATTR="${RESOURCE_NAME}-data-status"
+        PGSQL_XLOG_LOC_NAME="${RESOURCE_NAME}-xlog-loc"
+        PGSQL_MASTER_BASELINE="${RESOURCE_NAME}-master-baseline"
+
+        NODE_LIST=`echo $OCF_RESKEY_node_list | tr '[A-Z]' '[a-z]'`
+        RE_CONTROL_SLAVE="false"
+
         if ! ocf_is_ms; then
             ocf_exit_reason "Replication(rep_mode=async or sync) requires Master/Slave configuration."
             return $OCF_ERR_CONFIGURED
@@ -1961,40 +2025,12 @@ then
     exit $OCF_ERR_GENERIC
 fi
 
-
 PIDFILE=${OCF_RESKEY_pgdata}/postmaster.pid
 BACKUPLABEL=${OCF_RESKEY_pgdata}/backup_label
 RESOURCE_NAME=`echo $OCF_RESOURCE_INSTANCE | cut -d ":" -f 1`
 PGSQL_WAL_RECEIVER_STATUS_ATTR="${RESOURCE_NAME}-receiver-status"
 RECOVERY_CONF=${OCF_RESKEY_pgdata}/recovery.conf
 NODENAME=$(ocf_local_nodename | tr '[A-Z]' '[a-z]')
-
-if is_replication; then
-    REP_MODE_CONF=${OCF_RESKEY_tmpdir}/rep_mode.conf
-    PGSQL_LOCK=${OCF_RESKEY_tmpdir}/PGSQL.lock
-    XLOG_NOTE_FILE=${OCF_RESKEY_tmpdir}/xlog_note
-
-    CRM_MASTER="${HA_SBIN_DIR}/crm_master -l reboot"
-    CRM_ATTR_REBOOT="${HA_SBIN_DIR}/crm_attribute -l reboot"
-    CRM_ATTR_FOREVER="${HA_SBIN_DIR}/crm_attribute -l forever"
-    CRM_FAILCOUNT="${HA_SBIN_DIR}/crm_failcount"
-
-    CAN_NOT_PROMOTE="-INFINITY"
-    CAN_PROMOTE="100"
-    PROMOTE_ME="1000"
-
-    CHECK_MS_SQL="select pg_is_in_recovery()"
-    CHECK_XLOG_LOC_SQL="select pg_last_xlog_replay_location(),pg_last_xlog_receive_location()"
-    CHECK_REPLICATION_STATE_SQL="select application_name,upper(state),upper(sync_state) from pg_stat_replication"
-
-    PGSQL_STATUS_ATTR="${RESOURCE_NAME}-status"
-    PGSQL_DATA_STATUS_ATTR="${RESOURCE_NAME}-data-status"
-    PGSQL_XLOG_LOC_NAME="${RESOURCE_NAME}-xlog-loc"
-    PGSQL_MASTER_BASELINE="${RESOURCE_NAME}-master-baseline"
-
-    NODE_LIST=`echo $OCF_RESKEY_node_list | tr '[A-Z]' '[a-z]'`
-    RE_CONTROL_SLAVE="false"
-fi
 
 case "$1" in
     methods)    pgsql_methods

@@ -72,10 +72,11 @@ ocf_is_root() {
 }
 
 ocf_maybe_random() {
-	local rnd="$RANDOM"
-	# Something sane-ish in case a shell doesn't support $RANDOM
-	[ -n "$rnd" ] || rnd=$$
-	echo $rnd
+	if test -c /dev/urandom; then
+		od -An -N4 -tu4 /dev/urandom | tr -d '[:space:]'
+	else
+		awk -v pid=$$ 'BEGIN{srand(pid); print rand()}' | sed 's/^.*[.]//'
+	fi
 }
 
 # Portability comments:
@@ -231,7 +232,7 @@ __ha_log() {
 	  [ -n "$HA_LOGFILE" ]
 	then
 	  : appending to $HA_LOGFILE
-	  echo "$HA_LOGTAG:	"`hadate`"${*}" >> $HA_LOGFILE
+	  echo `hadate`" $HA_LOGTAG:    ${*}" >> $HA_LOGFILE
 	fi
 	if
 	  [ -z "$HA_LOGFACILITY" -a -z "$HA_LOGFILE" ] && ! [ "$ignore_stderr" = "true" ]
@@ -433,20 +434,20 @@ ocf_run() {
 
 	output=`"$@" 2>&1`
 	rc=$?
-	output=`echo $output`
+	[ -n "$output" ] && output="$(echo "$output" | tr -s ' \t\r\n' ' ')"
 	if [ $rc -eq 0 ]; then 
 	    if [ "$verbose" -a ! -z "$output" ]; then
 		ocf_log info "$output"
 	    fi
-	    return $OCF_SUCCESS
 	else
 	    if [ ! -z "$output" ]; then
 		ocf_log $loglevel "$output"
 	    else
 		ocf_log $loglevel "command failed: $*"
 	    fi
-	    return $rc
 	fi
+
+	return $rc
 }
 
 ocf_pidfile_status() {
@@ -465,24 +466,85 @@ ocf_pidfile_status() {
     return 1
 }
 
-ocf_take_lock() {
-    local lockfile=$1
-    local rnd=$(ocf_maybe_random)
+# mkdir(1) based locking
+# first the directory is created with the name given as $1
+# then a file named "pid" is created within that directory with
+# the process PID
+# stale locks are handled carefully, the inode of a directory
+# needs to match before and after test if the process is running
+# empty directories are also handled appropriately
+# we relax (sleep) occasionally to allow for other processes to
+# finish managing the lock in case they are in the middle of the
+# business
 
-    sleep 0.$rnd
-    while 
-	ocf_pidfile_status $lockfile
-    do
-	ocf_log info "Sleeping until $lockfile is released..."
-	sleep 0.$rnd
-    done
-    echo $$ > $lockfile
+relax() { sleep 0.5; }
+ocf_get_stale_pid() {
+	local piddir pid dir_inode
+
+	piddir="$1"
+	[ -z "$piddir" ] && return 2
+	dir_inode="`ls -di $piddir 2>/dev/null`"
+	[ -z "$dir_inode" ] && return 1
+	pid=`cat $piddir/pid 2>/dev/null`
+	if [ -z "$pid" ]; then
+		# empty directory?
+		relax
+		if [ "$dir_inode" = "`ls -di $piddir 2>/dev/null`" ]; then
+			echo $dir_inode
+		else
+			return 1
+		fi
+	elif kill -0 $pid >/dev/null 2>&1; then
+		return 1
+	elif relax && [ -e "$piddir/pid" ] && [ "$dir_inode" = "`ls -di $piddir 2>/dev/null`" ]; then
+		echo $pid
+	else
+		return 1
+	fi
 }
 
+# There is a race when the following two functions to manage the
+# lock file (mk and rm) are invoked in parallel by different
+# instances. It is up to the caller to reduce probability of that
+# taking place (see ocf_take_lock() below).
+
+ocf_mk_pid() {
+	mkdir $1 2>/dev/null && echo $$ > $1/pid
+}
+ocf_rm_pid() {
+	rm -f $1/pid
+	rmdir $1 2>/dev/null
+}
+
+# Testing and subsequently removing a stale lock (containing the
+# process pid) is inherently difficult to do in such a way as to
+# prevent a race between creating a pid file and removing it and
+# its directory. We reduce the probability of that happening by
+# checking if the stale lock persists over a random period of
+# time.
+
+ocf_take_lock() {
+	local lockdir=$1
+	local rnd
+	local stale_pid
+
+	# we don't want it too short, so strip leading zeros
+	rnd=$(ocf_maybe_random | sed 's/^0*//')
+	stale_pid=`ocf_get_stale_pid $lockdir`
+	if [ -n "$stale_pid" ]; then
+		sleep 0.$rnd
+		# remove "stale pid" only if it persists
+		[ "$stale_pid" = "`ocf_get_stale_pid $lockdir`" ] &&
+			ocf_rm_pid $lockdir
+	fi
+	while ! ocf_mk_pid $lockdir; do
+		ocf_log info "Sleeping until $lockdir is released..."
+		sleep 0.$rnd
+	done
+}
 
 ocf_release_lock_on_exit() {
-    local lockfile=$1
-    trap "rm -f $lockfile" EXIT
+	trap "ocf_rm_pid $1" EXIT
 }
 
 # returns true if the CRM is currently running a probe. A probe is
@@ -604,6 +666,22 @@ dirname()
 
 	echo "$b"
 	return 0
+}
+
+# usage: systemd_drop_in <name> <After|Before> <dependency.service>
+systemd_drop_in()
+{
+	if [ $# -ne 3 ]; then
+          ocf_log err "Incorrect number of arguments [$#] for systemd_drop_in."
+        fi
+
+	systemdrundir="/run/systemd/system/resource-agents-deps.target.d"
+	mkdir "$systemdrundir"
+	cat > "$systemdrundir/$1.conf" <<EOF
+[Unit]
+$2=$3
+EOF
+	systemctl daemon-reload
 }
 
 #
@@ -909,6 +987,48 @@ ocf_start_trace() {
 }
 ocf_stop_trace() {
 	set +x
+}
+
+# Helper functions to map from nodename/bundle-name and physical hostname
+# list_index_for_word "node0 node1 node2 node3 node4 node5" node4 --> 5
+# list_word_at_index "NA host1 host2 host3 host4 host5" 3      --> host2
+
+# list_index_for_word "node1 node2 node3 node4 node5" node7 --> ""
+# list_word_at_index "host1 host2 host3 host4 host5" 8      --> ""
+
+# attribute_target node1                                    --> host1
+list_index_for_word() {
+	echo $1 | tr ' ' '\n' | awk -v x="$2" '$0~x {print NR}'
+}
+
+list_word_at_index() {
+	echo $1 | tr ' ' '\n' | awk -v n="$2" 'n == NR'
+}
+
+ocf_attribute_target() {
+	if [ x$1 = x ]; then
+		if [ x$OCF_RESKEY_CRM_meta_container_attribute_target = xhost -a x$OCF_RESKEY_CRM_meta_physical_host != x ]; then
+			echo $OCF_RESKEY_CRM_meta_physical_host
+		else
+			if [ x$OCF_RESKEY_CRM_meta_on_node != x ]; then
+				echo $OCF_RESKEY_CRM_meta_on_node
+			else
+				ocf_local_nodename
+			fi
+		fi
+		return
+	elif [ x"$OCF_RESKEY_CRM_meta_notify_all_uname" != x ]; then
+		index=$(list_index_for_word "$OCF_RESKEY_CRM_meta_notify_all_uname" $1)
+		mapping=""
+		if [ x$index != x ]; then
+			mapping=$(list_word_at_index "$OCF_RESKEY_CRM_meta_notify_all_hosts" $index)
+		fi
+		if [ x$mapping != x -a x$mapping != xNA ]; then
+			echo $mapping
+			return
+		fi
+	fi
+	echo $1
 }
 
 __ocf_set_defaults "$@"

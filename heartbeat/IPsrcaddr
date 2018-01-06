@@ -400,7 +400,11 @@ srca_validate_all() {
 	fi
 
 	check_binary $AWK
-	check_binary $IFCONFIG
+	case "$SYSTYPE" in
+		*BSD|SunOS)
+			check_binary $IFCONFIG
+			;;
+	esac
 
 #	The IP address should be in good shape
 	if CheckIP "$ipaddress"; then
@@ -469,7 +473,7 @@ rc=$?
 }
 
 INTERFACE=`echo $findif_out | awk '{print $1}'`
-NETWORK=`ip route list dev $INTERFACE scope link match $ipaddress|grep -o '^[^ ]*'`
+NETWORK=`ip route list dev $INTERFACE scope link proto kernel match $ipaddress|grep -o '^[^ ]*'`
 
 case $1 in
 	start)		srca_start $ipaddress
