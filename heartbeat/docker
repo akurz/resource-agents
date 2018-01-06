@@ -113,8 +113,15 @@ the health of the container. This command must return 0 to indicate that
 the container is healthy. A non-zero return code will indicate that the
 container has failed and should be recovered.
 
-The command is executed using nsenter. In the future 'docker exec' will
-be used once it is more widely supported.
+If 'docker exec' is supported, it is used to execute the command. If not,
+nsenter is used.
+
+Note: Using this method for monitoring processes inside a container
+is not recommended, as containerd tries to track processes running
+inside the container and does not deal well with many short-lived
+processes being spawned. Ensure that your container monitors its
+own processes and terminates on fatal error rather than invoking
+a command from the outside.
 </longdesc>
 <shortdesc lang="en">monitor command</shortdesc>
 <content type="string"/>
@@ -174,20 +181,24 @@ monitor_cmd_exec()
 		return $rc
 	fi
 
-	out=$(echo "$OCF_RESKEY_monitor_cmd" | nsenter --target $(docker inspect --format {{.State.Pid}} ${CONTAINER}) --mount --uts --ipc --net --pid 2>&1)
-	rc=$?
-	if [ $rc -ne 0 ]; then
-		ocf_log info "monitor cmd exit code = $rc"
-		ocf_log info "stdout/stderr: $out"
+	if docker exec --help >/dev/null 2>&1; then
+		out=$(docker exec ${CONTAINER} $OCF_RESKEY_monitor_cmd 2>&1)
+		rc=$?
+	else
+		out=$(echo "$OCF_RESKEY_monitor_cmd" | nsenter --target $(docker inspect --format {{.State.Pid}} ${CONTAINER}) --mount --uts --ipc --net --pid 2>&1)
+		rc=$?
+	fi
 
-		if [ $rc -eq 127 ]; then
-			ocf_exit_reason "monitor_cmd, ${OCF_RESKEY_monitor_cmd} , not found within container."
-			# there is no recovering from this, exit immediately
-			exit $OCF_ERR_ARGS
-		fi
+	if [ $rc -eq 127 ]; then
+		ocf_log err "monitor cmd failed (rc=$rc), output: $out"
+		ocf_exit_reason "monitor_cmd, ${OCF_RESKEY_monitor_cmd} , not found within container."
+		# there is no recovering from this, exit immediately
+		exit $OCF_ERR_ARGS
+	elif [ $rc -ne 0 ]; then
+		ocf_exit_reason "monitor cmd failed (rc=$rc), output: $out"
 		rc=$OCF_ERR_GENERIC
 	else
-		ocf_log info "monitor cmd passed: exit code = $rc"
+		ocf_log debug "monitor cmd passed: exit code = $rc"
 	fi
 
 	return $rc
@@ -390,8 +401,11 @@ docker_validate()
 	fi
 
 	if [ -n "$OCF_RESKEY_monitor_cmd" ]; then
-		ocf_log info "checking for nsenter, which is required when 'monitor_cmd' is specified"
-		check_binary nsenter
+		docker exec --help >/dev/null 2>&1
+		if [ ! $? ]; then
+			ocf_log info "checking for nsenter, which is required when 'monitor_cmd' is specified"
+			check_binary nsenter
+		fi
 	fi
 
 	image_exists
@@ -403,7 +417,27 @@ docker_validate()
 	return $OCF_SUCCESS
 }
 
-: ${OCF_RESKEY_name=${OCF_RESOURCE_INSTANCE}}
+# TODO :
+# When a user starts plural clones in a node in globally-unique, a user cannot appoint plural name parameters.
+# When a user appoints reuse, the resource agent cannot connect plural clones with a container.
+
+if ocf_is_true "$OCF_RESKEY_CRM_meta_globally_unique"; then
+	if [ -n "$OCF_RESKEY_name" ]; then
+		if [ -n "$OCF_RESKEY_CRM_meta_clone_node_max" ] && [ "$OCF_RESKEY_CRM_meta_clone_node_max" -ne 1 ]
+		then
+			ocf_exit_reason "Cannot make plural clones from the same name parameter."
+			exit $OCF_ERR_CONFIGURED
+		fi
+		if [ -n "$OCF_RESKEY_CRM_meta_master_node_max" ] && [ "$OCF_RESKEY_CRM_meta_master_node_max" -ne 1 ]
+		then
+			ocf_exit_reason "Cannot make plural master from the same name parameter."
+			exit $OCF_ERR_CONFIGURED
+		fi
+	fi
+	: ${OCF_RESKEY_name=`echo ${OCF_RESOURCE_INSTANCE} | tr ':' '-'`} 
+else 
+	: ${OCF_RESKEY_name=${OCF_RESOURCE_INSTANCE}}
+fi
 
 if [ -n "$OCF_RESKEY_container" ]; then
 	# we'll keep the container attribute around for a bit in order not to break

@@ -8,7 +8,7 @@
 #
 #
 # Author:	Dejan Muhamedagic
-# Support:	linux-ha@lists.linux-ha.org
+# Support:	users@clusterlabs.org
 # License:	GNU General Public License (GPL)
 # Copyright:	(C) 2006 International Business Machines, Inc.
 #
@@ -291,7 +291,7 @@ dbasql() {
 	runsql "connect / as sysdba" $*
 }
 monsql() {
-	runsql "connect $MONUSR/\"$MONPWD\"" $*
+	runsql "connect \"$MONUSR\"/\"$MONPWD\"" $*
 }
 # use dbasql_one if the query should result in a single line output
 # at times people stuff commands in oracle .profile
@@ -371,7 +371,7 @@ show_mon_profile() {
 }
 mk_mon_profile() {
 	cat<<EOF
-create profile $MONPROFILE limit FAILED_LOGIN_ATTEMPTS UNLIMITED PASSWORD_LIFE_TIME UNLIMITED;
+create profile "$MONPROFILE" limit FAILED_LOGIN_ATTEMPTS UNLIMITED PASSWORD_LIFE_TIME UNLIMITED;
 EOF
 }
 show_mon_user() {
@@ -379,19 +379,19 @@ show_mon_user() {
 }
 mk_mon_user() {
 	cat<<EOF
-create user $MONUSR identified by "$MONPWD" profile $MONPROFILE;
-grant create session to $MONUSR;
-grant select on v_\$instance to $MONUSR;
+create user "$MONUSR" identified by "$MONPWD" profile "$MONPROFILE";
+grant create session to "$MONUSR";
+grant select on v_\$instance to "$MONUSR";
 EOF
 }
 show_mon_user_profile() {
 	echo "select PROFILE from dba_users where USERNAME='$MONUSR';"
 }
 set_mon_user_profile() {
-	echo "alter user $MONUSR profile $MONPROFILE;"
+	echo "alter user "$MONUSR" profile '$MONPROFILE';"
 }
 reset_mon_user_password() {
-	echo "alter user $MONUSR identified by $MONPWD;"
+	echo "alter user "$MONUSR" identified by "$MONPWD";"
 }
 check_mon_profile() {
 	local output
@@ -402,8 +402,11 @@ check_mon_profile() {
 	output=`dbasql mk_mon_profile show_mon_profile`
 	if echo "$output" | grep -iw "^$MONPROFILE" >/dev/null; then
 		return 0
+	elif echo "$output" | grep ORA-65140 >/dev/null 2>&1; then
+		ocf_exit_reason "monprofile must start with C## for container databases"
+		return $OCF_ERR_CONFIGURED
 	else
-		ocf_log err "could not create $MONPROFILE oracle profile"
+		ocf_exit_reason "could not create $MONPROFILE oracle profile"
 		ocf_log err "sqlplus output: $output"
 		return 1
 	fi
@@ -426,7 +429,7 @@ check_mon_user() {
 			if echo "$output2" | grep -iw "^$MONPROFILE" >/dev/null; then
 				return 0
 			fi
-			ocf_log err "could not set profile for $MONUSR oracle user"
+			ocf_exit_reason "could not set profile for $MONUSR oracle user"
 			ocf_log err "sqlplus output: $output( $output2 )"
 			return 1
 		fi
@@ -434,8 +437,11 @@ check_mon_user() {
 	output=`dbasql mk_mon_user show_mon_user`
 	if echo "$output" | grep -iw "^$MONUSR" >/dev/null; then
 		return 0
+	elif echo "$output" | grep ORA-65096 >/dev/null 2>&1; then
+		ocf_exit_reason "monuser must start with C## for container databases"
+		return $OCF_ERR_CONFIGURED
 	else
-		ocf_log err "could not create $MONUSR oracle user"
+		ocf_exit_reason "could not create $MONUSR oracle user"
 		ocf_log err "sqlplus output: $output"
 		return 1
 	fi
@@ -611,6 +617,7 @@ oracle_start() {
 		if echo "$output" | grep ORA-01081 >/dev/null 2>&1; then
 			ocf_log info "ORA-01081 error found, trying to cleanup oracle (dbstart_mount output: $output)"
 			ora_cleanup
+			output=`dbasql dbstop_immediate`
 			output=`dbasql dbstart_mount`
 		fi
 	fi
@@ -622,7 +629,7 @@ oracle_start() {
 		;;
 	*)
 		: error!!
-		ocf_log err "oracle $ORACLE_SID can not be mounted (status: $status)"
+		ocf_exit_reason "oracle $ORACLE_SID can not be mounted (status: $status)"
 		return $OCF_ERR_GENERIC
 		;;
 	esac
@@ -646,10 +653,10 @@ oracle_start() {
 	fi
 
 	if ! is_proc_running; then
-		ocf_log err "oracle process not running: $output"
+		ocf_exit_reason "oracle process not running: $output"
 		return $OCF_ERR_GENERIC
 	elif ! instance_live; then
-		ocf_log err "oracle instance $ORACLE_SID not started: $output"
+		ocf_exit_reason "oracle instance $ORACLE_SID not started: $output"
 		return $OCF_ERR_GENERIC
 	else
 		: cool, we are up and running
@@ -672,7 +679,7 @@ oracle_stop() {
 	fi
 	ocf_stop_processes TERM $PROCS_CLEANUP_TIME `proc_pids`  # kill the procs if they hanged
 	if is_proc_running; then
-		ocf_log err "Oracle instance $ORACLE_SID not stopped: $output"
+		ocf_exit_reason "Oracle instance $ORACLE_SID not stopped: $output"
 		return $OCF_ERR_GENERIC
 	else
 		ocf_log info "Oracle instance $ORACLE_SID stopped: $output"
@@ -692,7 +699,7 @@ oracle_monitor() {
 		return $OCF_NOT_RUNNING
 	fi
 	if ! instance_live; then
-		ocf_log err "oracle instance $ORACLE_SID is down"
+		ocf_exit_reason "oracle instance $ORACLE_SID is down"
 		return $OCF_ERR_GENERIC
 	fi
 	#ocf_log info "Oracle instance $ORACLE_SID is alive"
@@ -727,14 +734,14 @@ oracle_validate_all() {
 	case "${shutdown_method}" in
 	"immediate") ;;
 	"checkpoint/abort") ;;
-	*) ocf_log err "unsupported shutdown_method, please read meta-data"
+	*) ocf_exit_reason "unsupported shutdown_method, please read meta-data"
 		return $OCF_ERR_CONFIGURED
 		;;
 	esac
 
 	case "${IPCRM}" in
 	"none"|"instance"|"orauser") ;;
-	*) ocf_log err "unsupported ipcrm setting, please read meta-data"
+	*) ocf_exit_reason "unsupported ipcrm setting, please read meta-data"
 		return $OCF_ERR_CONFIGURED
 		;;
 	esac
@@ -751,10 +758,10 @@ PROCS_CLEANUP_TIME="30"
 
 MONUSR=${OCF_RESKEY_monuser:-$OCF_RESKEY_monuser_default}
 MONPWD=${OCF_RESKEY_monpassword:-$OCF_RESKEY_monpassword_default}
-MONPROFILE=${OCF_RESKEY_monprofile_default:-$OCF_RESKEY_monprofile_default}
+MONPROFILE=${OCF_RESKEY_monprofile:-$OCF_RESKEY_monprofile_default}
 
-MONUSR=$(echo $MONUSR | awk '{print toupper($0)}')
-MONPROFILE=$(echo $MONPROFILE | awk '{print toupper($0)}')
+MONUSR=$(echo "$MONUSR" | awk '{print toupper($0)}')
+MONPROFILE=$(echo "$MONPROFILE" | awk '{print toupper($0)}')
 OCF_REQUIRED_PARAMS="sid"
 OCF_REQUIRED_BINARIES="sqlplus"
 ocf_rarun $*

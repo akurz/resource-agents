@@ -214,6 +214,9 @@ If this directive is defined, the supplied script is executed whenever all
 real servers for a virtual service are down or when the first real server
 comes up again. In the first case, it is called with "start" as its first
 argument, in the latter with "stop".
+Additional parameters are vserver with vport (vserver:vport) as second param
+and protocol (tcp/udp) as third param to identify the virtual service
+within the fallback script.
 
 If defined in a virtual server section then the global value is overridden.
 
@@ -573,6 +576,8 @@ overridden by an optional per real-server based receive regexp.
 
 For a DNS check this should be any one the A record's addresses or
 any one of the PTR record's names.
+In case of dynamic DNS answers (different answers on the same question)
+a regex to match multiple addresses or PTR record names could also defined.
 
 For a MySQL check, the receive setting is not used.
 
@@ -597,7 +602,7 @@ B<login = ">I<username>B<">
 For FTP, IMAP, LDAP, MySQL, Oracle, POP and PostgreSQL, the username
 used to log in.
 
-For Radius the username is used for the attribute User-Name.
+For RADIUS the username is used for the attribute User-Name.
 
 For SIP, the username is used as both the to and from address for an
 OPTIONS query.
@@ -623,7 +628,7 @@ B<passwd = ">I<password>B<">
 Password to use to login to FTP, IMAP, LDAP, MySQL, Oracle, POP, PostgreSQL
 and SIP servers.
 
-For Radius the passwd is used for the attribute User-Password.
+For RADIUS the passwd is used for the attribute User-Password.
 
 Default:
 
@@ -647,7 +652,7 @@ against.  This is a required setting.
 
 B<secret = ">I<radiussecret>B<">
 
-Secret to use for Radius servers, this is the secret used to perform an
+Secret to use for RADIUS servers, this is the secret used to perform an
 Access-Request with the username (set by B<login> above) and passwd (set by
 B<passwd> above).
 
@@ -706,6 +711,17 @@ Specify that a virtual service uses one-packet scheduling. This option
 can be used only for UDP services. If this option is specified, all connections
 are created only to schedule one packet. Option is useful to schedule
 UDP packets from same client port to different real servers.
+
+B<servicename = >I<short name>
+
+A name for this service. This is for the sole purpose of making it easier
+to know which service is affected when e-mail notifications are sent out.
+It will be included in the e-mail subject and body.
+
+B<comment = >I<comment>
+
+Notes about this service to be included in e-mail notifications (for example,
+purpose of the service or relevant administrator to contact).
 
 =head1 IPv6
 
@@ -1612,6 +1628,10 @@ sub read_config
 				} elsif  ($rcmd =~ /^smtp\s*=\s*(.*)/) {
 					$1 =~ /(^([0-9A-Za-z._+-]+))/ or &config_error($line, "invalid SMTP server address");
 					$vsrv{smtp} = $1;
+				} elsif  ($rcmd =~ /^servicename\s*=\s*(.*)/) {
+					$vsrv{servicename} = $1;
+				} elsif  ($rcmd =~ /^comment\s*=\s*(.*)/) {
+					$vsrv{comment} = $1;
 				} else {
 					&config_error($line, "Unknown command \"$linedata\"");
 				}
@@ -2103,7 +2123,7 @@ sub add_real_server
 	my $new_rsrv;
 	my $rsrv;
 
-	$new_rsrv = {"server"=>$ip, "port"=>$port};
+	$new_rsrv = {"server"=>$ip, "port"=>$port, "failcount"=>0};
 
 	$flags =~ /(\w+)(.*)/ && ($1 eq "gate" || $1 eq "masq" || $1 eq "ipip")
 		or &config_error($line,	"forward method must be gate, masq or ipip");
@@ -2585,6 +2605,10 @@ sub ld_start
 		}
 		purge_virtual($nv, "start");
 	}
+
+	# initial check of all real servers while we are still starting up so
+	# any e-mail notifications sent out are in 'starting' daemon status.
+	_ld_main_check_all();
 }
 
 sub ld_cmd_children
@@ -2657,24 +2681,8 @@ sub ld_main
 			check_signal();
 
 		} else {
-			my @real_checked;
-			foreach my $v (@VIRTUAL) {
-				my $real = $$v{real};
-				my $virtual_id = get_virtual_id_str($v);
+			_ld_main_check_all();
 
-				REAL: foreach my $r (@$real) {
-					my $real_id = get_real_id_str($r, $v);
-					check_signal();
-					foreach my $tmp_id (@real_checked) {
-						if($real_id eq $tmp_id) {
-							&ld_debug(3, "Already checked: real server=$real_id (virtual=$virtual_id)");
-							next REAL;
-						}
-					}
-					_check_real($v, $r);
-					push(@real_checked, $real_id);
-				}
-			}
 			check_signal();
 			if (!check_cfgfile()) {
 				sleep $CHECKINTERVAL;
@@ -2713,6 +2721,11 @@ sub run_child
 	my $real = $$v{real};
 	my $virtual_id = get_virtual_id_str($v);
 	my $checkinterval = $$v{checkinterval} || $CHECKINTERVAL;
+
+	# delete any entries in EMAILSTATUS as we can't trust what has been
+	# set in the parent in the past.
+	%EMAILSTATUS = ();
+
 	$0 = "ldirectord $virtual_id";
 	while (1) {
 		foreach my $r (@$real) {
@@ -2722,6 +2735,30 @@ sub run_child
 		$0 = "ldirectord $virtual_id";
 		sleep $checkinterval;
 		ld_emailalert_resend();
+	}
+}
+
+# run checks for everything
+sub _ld_main_check_all
+{
+	my @real_checked;
+
+	foreach my $v (@VIRTUAL) {
+		my $real = $$v{real};
+		my $virtual_id = get_virtual_id_str($v);
+
+		REAL: foreach my $r (@$real) {
+			my $real_id = get_real_id_str($r, $v);
+			check_signal();
+			foreach my $tmp_id (@real_checked) {
+				if($real_id eq $tmp_id) {
+					&ld_debug(3, "Already checked: real server=$real_id (virtual=$virtual_id)");
+					next REAL;
+				}
+			}
+			_check_real($v, $r);
+			push(@real_checked, $real_id);
+		}
 	}
 }
 
@@ -2845,6 +2882,8 @@ sub check_http
 {
 	use LWP::UserAgent;
 	use LWP::Debug;
+	use Net::HTTP;
+	use URI;
 	if($DEBUG > 2) {
 		LWP::Debug::level('+');
 	}
@@ -2857,9 +2896,12 @@ sub check_http
 		. "virtualhost=\"$virtualhost\"");
 
 	if (inet_pton(AF_INET6,&ld_strip_brackets($host))) {
-		no warnings 'once';
 		require Net::INET6Glue::INET_is_INET6;
-		# Workaround for Net-HTTP IPv6 Address URLs Broken
+	}
+
+	# Workaround for Net-HTTP IPv6 Address URLs Broken
+	if ($LWP::VERSION < 6.08 || $Net::HTTP::VERSION < 6.07 || $URI::VERSION < 1.64) {
+		no warnings 'once';
 		@LWP::Protocol::http::EXTRA_SOCK_OPTS = (PeerAddr => $host,
 							 PeerHost => &ld_strip_brackets($host),
 							 Host => &ld_strip_brackets($host));
@@ -2959,7 +3001,7 @@ sub check_pop
 	my ($v, $r, $ssl) = @_;
 	my $port = ld_checkport($v, $r);
 
-	&ld_debug(2, "Checking pop server=$$r{server} port=$port ssl=$ssl");
+	&ld_debug(2, "Checking POP3 server=$$r{server} port=$port ssl=$ssl");
 
 	my $pop = new Mail::POP3Client(USER => $$v{login},
 					PASSWORD => $$v{passwd},
@@ -2994,7 +3036,7 @@ sub check_imap
 	my ($v, $r) = @_;
 	my $port = ld_checkport($v, $r);
 
-	&ld_debug(2, "Checking imap server=$$r{server} port=$port");
+	&ld_debug(2, "Checking IMAP server=$$r{server} port=$port");
 
 	my $imap = Net::IMAP::Simple->new($$r{server},
 					port => $port,
@@ -3025,7 +3067,7 @@ sub check_imaps
 	my ($v, $r) = @_;
 	my $port = ld_checkport($v, $r);
 
-	&ld_debug(2, "Checking imaps server=$$r{server} port=$port");
+	&ld_debug(2, "Checking IMAPS server=$$r{server} port=$port");
 
 	my $imaps = Net::IMAP::Simple::SSL->new($$r{server},
 					port => $port,
@@ -3058,7 +3100,7 @@ sub check_ldap
 	my $result;
 	my $recstr = $$r{receive};
 
-	&ld_debug(2, "Checking ldap server=$$r{server} port=$port");
+	&ld_debug(2, "Checking LDAP server=$$r{server} port=$port");
 	eval {
 		local $SIG{'__DIE__'} = "DEFAULT";
 		local $SIG{'ALRM'} = sub { die "Timeout Alarm" };
@@ -3136,7 +3178,7 @@ sub check_nntp
 	my $port = ld_checkport($v, $r);
 	my $status = 1;
 
-	&ld_debug(2, "Checking nntp server=$$r{server} port=$port");
+	&ld_debug(2, "Checking NNTP server=$$r{server} port=$port");
 
 	unless ($sock = IO::Socket::INET6->new(PeerAddr => $$r{server},
 		PeerPort => $port, Proto => 'tcp',
@@ -3169,7 +3211,7 @@ sub check_radius
 
 	my ($v, $r) = @_;
 
-	&ld_debug(2, "Checking radius");
+	&ld_debug(2, "Checking RADIUS");
 
 	my $port = ld_checkport($v, $r);
 	my $radius;
@@ -3182,19 +3224,19 @@ sub check_radius
 		&ld_debug(2, "Starting Check");
 		alarm $$v{checktimeout};
 
-		&ld_debug(2, "Starting Radius");
+		&ld_debug(2, "Starting RADIUS");
 		$radius = new Authen::Radius(Host => "$$r{server}:$port",
 					     Secret=>$$v{secret},
 					     TimeOut=>$$v{negotiatetimeout},
 					     Errmode=>'die');
 		$result = $radius->check_pwd($$v{login}, $$v{passwd});
-		&ld_debug(2, "Finished Radius");
+		&ld_debug(2, "Finished RADIUS");
 		alarm 0; # Cancel the alarm
 	};
 	if ($result eq "") {
 		&service_set($v, $r, "down", {do_log => 1});
 		&ld_debug(3, "Deactivated service $$r{server}:$$r{port}: $@");
-		&ld_debug(3, "Radius Error: ".$radius->get_error);
+		&ld_debug(3, "RADIUS Error: ".$radius->get_error);
 		return $SERVICE_DOWN;
 	} else {
 		&service_set($v, $r, "up", {do_log => 1});
@@ -3424,7 +3466,7 @@ sub check_sip
 	my ($v, $r) = @_;
 	my $sip_d_port = ld_checkport($v, $r);
 
-	&ld_debug(2, "Checking sip server=$$r{server} port=$sip_d_port");
+	&ld_debug(2, "Checking SIP server=$$r{server} port=$sip_d_port");
 
 
 	eval {
@@ -3587,7 +3629,7 @@ sub check_ftp
 	my $debug = ($DEBUG > 2) ? 1 : 0;
 	my $port = ld_checkport($v, $r);
 
-	&ld_debug(2, "Checking ftp server=$$r{server} port=$port");
+	&ld_debug(2, "Checking FTP server=$$r{server} port=$port");
 	&ld_debug(4, "Timeout is $$v{negotiatetimeout}");
 
 	open(TMP,'+>', undef);
@@ -3632,6 +3674,7 @@ sub check_dns
 	my $request;
 	my $server;
 	my ($v,$r) = @_;
+	my $port = ld_checkport($v, $r);
 	{
 		# Net::DNS makes unguarded calls to eval
 		# which throw a fatal exception if they fail
@@ -3651,7 +3694,7 @@ sub check_dns
 	
 	$server = &ld_strip_brackets($$r{server});
 
-	&ld_debug(2, "Checking dns: request=\"$request\" receive=\""
+	&ld_debug(2, "Checking DNS: request=\"$request\" receive=\""
 		. $$r{"receive"} . "\"\n");
 
 	eval {
@@ -3659,6 +3702,7 @@ sub check_dns
 		local $SIG{'ALRM'} = sub { die "timeout\n"; };
 		alarm($$v{negotiatetimeout});
 		$res->nameservers($server);
+		$res->port($port);
 		if ($$v{"protocol"} eq "tcp") {
 			$res->usevc(1);
 		}
@@ -3671,9 +3715,10 @@ sub check_dns
 		return $SERVICE_DOWN;
 	}
 
+	my $recstr = $$r{receive};
 	foreach $rr ($query->answer) {
-		if (($rr->type eq "A" and $rr->address eq $$r{"receive"}) or
-		    ($rr->type eq "PTR" and $rr->ptrdname eq $$r{"receive"})) {
+		if (($rr->type eq "A" and length($recstr) and $rr->address =~ /$recstr/) or
+		    ($rr->type eq "PTR" and length($recstr) and $rr->ptrdname =~ /$recstr/)) {
 			service_set($v, $r, "up", {do_log => 1}, "Success");
 			return $SERVICE_UP;
 		}
@@ -4238,9 +4283,9 @@ sub do_fallback_command
 	$v->{fallbackcommand_status} = $status;
 
 	if (defined($v->{fallbackcommand})) {
-		&system_wrapper($v->{fallbackcommand} . " " . $status);
+		&system_wrapper($v->{fallbackcommand} . " " . $status . " " . $v->{server} . ":" . $v->{port} . " " . $v->{protocol});
 	} elsif (defined($FALLBACKCOMMAND)) {
-		&system_wrapper($FALLBACKCOMMAND . " " . $status);
+		&system_wrapper($FALLBACKCOMMAND . " " . $status . " " . $v->{server} . ":" . $v->{port} . " " . $v->{protocol});
 	}
 }
 
@@ -4410,6 +4455,7 @@ sub ld_emailalert_send
 	my $id;
 	my $statusfilter;
 	my $smtp_server;
+	my $virtual_info;
 
 	$frequency = defined $v->{emailalertfreq} ?  $v->{emailalertfreq} :
 				$EMAILALERTFREQ;
@@ -4440,15 +4486,42 @@ sub ld_emailalert_send
 				$SMTP;
 
 	&ld_log("emailalert: $subject");
+
+	# get extra service details
+	$virtual_info = _ld_virtual_server_details($v);
+
+	# add service name into e-mail subject if it has been set
+	if ($v->{servicename}) {
+		$subject = "[" . $v->{servicename}  ."] $subject";
+	}
+
 	if (defined $smtp_server) {
-		$status = &ld_emailalert_net_smtp($smtp_server, $to_addr, $subject);
+		$status = &ld_emailalert_net_smtp($smtp_server, $to_addr, $subject, $virtual_info);
 	}
 	else {
-		$status = &ld_emailalert_mail_send($to_addr, $subject);
+		$status = &ld_emailalert_mail_send($to_addr, $subject, $virtual_info);
 	}
 
 	return($status);
 }
+
+# generate virtual server information to go in to alert e-mails
+sub _ld_virtual_server_details
+{
+	my ($v) = @_;
+	my $details;
+
+	if ($v->{servicename}) {
+		$details .= "Service name: " . $v->{servicename} . "\n"
+	}
+
+	if ($v->{comment}) {
+		$details .= "Comment: " . $v->{comment} . "\n";
+	}
+
+	return $details;
+}
+
 
 # ld_emailalert_net_smtp
 # Send email alerts via SMTP server
@@ -4458,7 +4531,7 @@ sub ld_emailalert_send
 #	  1 on error
 sub ld_emailalert_net_smtp
 {
-	my ($smtp_server, $to_addr, $subject) = (@_);
+	my ($smtp_server, $to_addr, $subject, $extrabody) = (@_);
 	my $status = 0;
 
 	use Net::SMTP;
@@ -4484,6 +4557,7 @@ sub ld_emailalert_net_smtp
 				"Log-Message: $subject\n" .
 				"Daemon-Status: " .
 				&daemon_status_str() . "\n");
+		$smtp->datasend("\n$extrabody\n") if ($extrabody);
 		$smtp->dataend();
 		$smtp->quit;
 	} else {
@@ -4502,7 +4576,7 @@ sub ld_emailalert_net_smtp
 #	  1 on error
 sub ld_emailalert_mail_send
 {
-	my ($to_addr, $subject) = (@_);
+	my ($to_addr, $subject, $extrabody) = (@_);
 	my $emailmsg;
 	my $emailfh;
 	my $status = 0;
@@ -4515,6 +4589,7 @@ sub ld_emailalert_mail_send
 	print $emailfh "ldirectord host: " . hostname() . "\n" .
 		       "Log-Message: $subject\n" .
 		       "Daemon-Status: " . &daemon_status_str() . "\n";
+	print $emailfh "\n$extrabody\n" if ($extrabody);
 	unless ($emailfh->close) {
 		&ld_log("failed to send email message\n");
 		$status = 1;

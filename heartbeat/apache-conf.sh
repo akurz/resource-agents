@@ -5,7 +5,7 @@
 # Author:	Alan Robertson
 #		Sun Jiang Dong
 #
-# Support:	linux-ha@lists.linux-ha.org
+# Support:	users@clusterlabs.org
 #
 # License:	GNU General Public License (GPL)
 #
@@ -24,7 +24,9 @@ apachecat() {
 	function procline() {
 		split($0,a);
 		if( a[1]~/^[Ii]nclude$/ ) {
-			procinclude(a[2]);
+			includedir=a[2];
+			gsub("\"","",includedir);
+			procinclude(includedir);
 		} else {
 			if( a[1]=="ServerRoot" ) {
 				rootdir=a[2];
@@ -78,7 +80,7 @@ apachecat() {
 get_apache_params() {
 	configfile=$1
 	shift 1
-	vars=`echo $@ | sed 's/ /,/g'`
+	vars=$(echo "$@" | sed 's/ /,/g')
 
 	eval `
 	apachecat $configfile | awk -v vars="$vars" '

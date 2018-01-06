@@ -4,7 +4,7 @@
 #
 #
 # Author:      Dejan Muhamedagic
-# Support:     linux-ha@lists.linux-ha.org
+# Support:     users@clusterlabs.org
 # License:     GNU General Public License (GPL)
 # Copyright:   (C) 2012 Dejan Muhamedagic, SUSE/Attachmate
 #
@@ -65,7 +65,7 @@ ora_common_validate_all() {
 	US=`id -u -n`
 	if [ $US != root -a $US != $ORACLE_OWNER ]
 	then
-	  ocf_log err "$0 must be run as root or $ORACLE_OWNER"
+	  ocf_exit_reason "$0 must be run as root or $ORACLE_OWNER"
 	  return $OCF_ERR_PERM
 	fi
 	return 0

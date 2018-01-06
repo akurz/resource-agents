@@ -7,7 +7,7 @@
 #
 #
 # Author:	Alan Robertson
-# Support:	linux-ha@lists.linux-ha.org
+# Support:	users@clusterlabs.org
 # License:	GNU General Public License (GPL)
 # Copyright:	(C) 2002 - 2005 International Business Machines, Inc.
 #
@@ -98,11 +98,11 @@ If "exclusive" is set on a non clustered volume group, this overrides the tag to
 
 <parameter name="partial_activation" unique="0" required="0">
 <longdesc lang="en">
-If set, the volume group will be activated even only partial of the physical
-volumes available. It helps to set to true, when you are using mirroring
+If set, the volume group will be activated partially even with some
+physical volumes missing. It helps to set to true when using mirrored
 logical volumes.
 </longdesc>
-<shortdesc lang="en">Activate VG even with partial PV only</shortdesc>
+<shortdesc lang="en">Activate VG partially when missing PVs</shortdesc>
 <content type="string" default="false" />
 </parameter>
 
@@ -386,7 +386,7 @@ get_activate_options()
 ##
 retry_exclusive_start()
 {
-	local vgchange_options=$(get_activate_options)
+	local vgchange_options="$(get_activate_options)"
 
 	# Deactivate each LV in the group one by one cluster wide
 	set -- $(lvs -o name,attr --noheadings $OCF_RESKEY_volgrpname 2> /dev/null)
@@ -412,7 +412,7 @@ retry_exclusive_start()
 #	Enable LVM volume
 #
 LVM_start() {
-	local vgchange_options=$(get_activate_options)
+	local vgchange_options="$(get_activate_options)"
 	local vg=$1
 	local clvmd=0
 
@@ -542,8 +542,30 @@ LVM_validate_all() {
 	##
 	VGOUT=`vgck ${VOLUME} 2>&1`
 	if [ $? -ne 0 ]; then
-		ocf_exit_reason "Volume group [$VOLUME] does not exist or contains error! ${VGOUT}"
-		exit $OCF_ERR_GENERIC
+		# Inconsistency might be due to missing physical volumes, which doesn't 
+		# automatically mean we should fail.  If partial_activation=true then 
+		# we should let start try to handle it, or if no PVs are listed as
+		# "unknown device" then another node may have marked a device missing 
+		# where we have access to all of them and can start without issue. 
+		if vgs -o pv_attr --noheadings $OCF_RESKEY_volgrpname 2>/dev/null | grep 'm' > /dev/null 2>&1; then
+			if vgs -o pv_name --noheadings $OCF_RESKEY_volgrpname 2>/dev/null | grep -E "unknown device|Couldn't find device|Device mismatch detected" > /dev/null 2>&1; then
+				if ! ocf_is_true "$OCF_RESKEY_partial_activation" ; then
+					# We are missing devices and cannot activate partially
+					ocf_exit_reason "Volume group [$VOLUME] has devices missing.  Consider partial_activation=true to attempt to activate partially"
+					exit $OCF_ERR_GENERIC
+				else
+					# We are missing devices but are allowed to activate partially. 
+					# Assume that caused the vgck failure and carry on
+					ocf_log warn "Volume group inconsistency detected with missing device(s) and partial_activation enabled.  Proceeding with requested action."
+				fi
+			fi
+			# else the vg is partial but all devices are accounted for, so another 
+			# node must have marked the device missing.  Proceed.
+		else
+			# vgck failure was for something other than missing devices
+			ocf_exit_reason "Volume group [$VOLUME] does not exist or contains error! ${VGOUT}"
+			exit $OCF_ERR_GENERIC
+		fi
 	fi
 
 	##

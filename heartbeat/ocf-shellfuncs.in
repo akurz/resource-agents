@@ -57,6 +57,7 @@ fi
 . ${OCF_FUNCTIONS_DIR}/ocf-returncodes
 . ${OCF_FUNCTIONS_DIR}/ocf-directories
 . ${OCF_FUNCTIONS_DIR}/ocf-rarun
+. ${OCF_FUNCTIONS_DIR}/ocf-distro
 
 # Define OCF_RESKEY_CRM_meta_interval in case it isn't already set,
 # to make sure that ocf_is_probe() always works
@@ -150,16 +151,16 @@ __ocf_set_defaults() {
 		: ${OCF_RESOURCE_TYPE:=$__SCRIPT_NAME}
 	fi
 
+	if [ "x$__OCF_ACTION" = "xmeta-data" ]; then
+		: ${OCF_RESOURCE_INSTANCE:="RESOURCE_ID"}
+	fi
+
 	if [ -z "$OCF_RA_VERSION_MAJOR" ]; then
 		: We are being invoked as an init script.
 		: Fill in some things with reasonable values.
 		: ${OCF_RESOURCE_INSTANCE:="default"}
 		return 0
         fi
-
-	if [ "x$__OCF_ACTION" = "xmeta-data" ]; then
-		OCF_RESOURCE_INSTANCE="undef"
-	fi	
 
 	if [ -z "$OCF_RESOURCE_INSTANCE" ]; then
 		ha_log "ERROR: Need to tell us our resource instance name."
@@ -612,8 +613,7 @@ dirname()
 # resource monitoring, and better resource tracking in general, this will
 # become essential.
 #
-# These scripts work because ${HA_RSCTMP} is cleaned out every time
-# heartbeat is started.
+# These scripts work because ${HA_RSCTMP} is cleaned on node reboot.
 #
 # We create "resource-string" tracking files under ${HA_RSCTMP} in a
 # very simple way:
@@ -778,7 +778,7 @@ ocf_mkstatedir()
 	[ $(id -u) = 0 ] || return 1
 
 	case $path in
-	$HA_VARRUN/*) : this path is ok ;;
+	${HA_VARRUN%/}/*) : this path is ok ;;
 	*) ocf_log err "cannot create $path (does not start with $HA_VARRUN)"
 		return 1
 	;;
@@ -901,7 +901,9 @@ ocf_start_trace() {
 			return
 		ocf_trace_redirect_to_file "$__OCF_TRC_DEST"
 	fi
-	PS4='+ `date +"%T"`: ${FUNCNAME[0]:+${FUNCNAME[0]}:}${LINENO}: '
+	if [ -n "$BASH_VERSION" ]; then
+		PS4='+ `date +"%T"`: ${FUNCNAME[0]:+${FUNCNAME[0]}:}${LINENO}: '
+	fi
 	set -x
 	env=$( echo; printenv | sort )
 }

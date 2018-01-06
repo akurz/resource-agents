@@ -17,7 +17,7 @@
 
 MAINTAINERCLEANFILES = Makefile.in
 
-EXTRA_DIST		= $(ocftcfgs_DATA) $(ocft_DATA)
+EXTRA_DIST		= $(ocftcfgs_DATA) $(ocft_DATA) $(ocft_SCRIPTS)
 
 sbin_SCRIPTS		= ocft
 
@@ -56,5 +56,8 @@ ocftcfgs_DATA      =  apache  	\
 ocftdir			= $(datadir)/$(PACKAGE_NAME)/ocft
 ocft_DATA		= README	\
 			  README.zh_CN	\
-			  caselib
+			  caselib	\
+			  helpers.sh	\
+			  runocft.prereq
+ocft_SCRIPTS	= runocft
 
