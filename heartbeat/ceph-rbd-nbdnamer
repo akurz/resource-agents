@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+DEV=$1
+MAP=`rbd-nbd list-mapped 2>/dev/null | grep -E "[[:space:]]+/dev/${DEV}[[:space:]]+\$"`
+POOL=`echo $MAP | awk '{print $2}'`
+IMAGE=`echo $MAP | awk '{print $3}'`
+SNAP=`echo $MAP | awk '{print $4}'`
+
+if [ "$SNAP" = "-" ]; then
+  echo -n "$POOL $IMAGE"
+else
+  echo -n "$POOL $IMAGE@$SNAP"
+fi
