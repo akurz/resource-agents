@@ -1,0 +1,5 @@
+KERNEL=="nbd[0-9]*", ENV{DEVTYPE}=="disk", PROGRAM="/usr/local/bin/ceph-rbd-nbdnamer %k", SYMLINK+="rbd-nbd/%c{1}/%c{2}"
+KERNEL=="nbd[0-9]*", ENV{DEVTYPE}=="partition", PROGRAM="/usr/local/bin/ceph-rbd-nbdnamer %k", SYMLINK+="rbd-nbd/%c{1}/%c{2}-part%n"
+
+# This is a placeholder, uncomment and edit as necessary
+#KERNEL=="nbd[0-9]*", ENV{DEVTYPE}=="disk", ACTION=="add|change", ATTR{bdi/read_ahead_kb}="128"
