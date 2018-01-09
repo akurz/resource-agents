@@ -135,128 +135,136 @@ EOF
 }
 
 get_nbd_info() {
-    local pattern
+  local pattern
 
-    # Example output from "rbd-nbd list-mapped":
-    # pid     pool image snap device    
-    # 1217604 rbd  test  -    /dev/nbd0 
+  # Example output from "rbd-nbd list-mapped":
+  # pid     pool image snap device
+  # 1217604 rbd  test  -    /dev/nbd0
 
-    # Substitute "-" for the snapshot name if needed
-    pattern="\([0-9]\+\)[ \t]\+${OCF_RESKEY_pool}[ \t]\+${OCF_RESKEY_name}[ \t]\+${OCF_RESKEY_snap:--}[ \t]\+\(/dev/nbd[0-9]\+\)[ \t]*$"
+  # Substitute "-" for the snapshot name if needed
+  pattern="\([0-9]\+\)[ \t]\+${OCF_RESKEY_pool}[ \t]\+${OCF_RESKEY_name}[ \t]\+${OCF_RESKEY_snap:--}[ \t]\+\(/dev/nbd[0-9]\+\)[ \t]*$"
 
-    # Get either the nbd-server pid or the device name
-    case $1 in
-      pid)
-        rbd-nbd list-mapped 2>/dev/null | tail -n +2 | sed -n -e "s,$pattern,\1,p"
-        ;;
-      dev)
-        rbd-nbd list-mapped 2>/dev/null | tail -n +2 | sed -n -e "s,$pattern,\2,p"
-        ;;
-    esac
+  # Get either the nbd-server pid or the device name
+  case $1 in
+    pid)
+      rbd-nbd list-mapped 2>/dev/null | tail -n +2 | sed -n -e "s,$pattern,\1,p"
+      ;;
+    dev)
+      rbd-nbd list-mapped 2>/dev/null | tail -n +2 | sed -n -e "s,$pattern,\2,p"
+      ;;
+  esac
 }
 
 rbdnbd_monitor() {
-    local rc
-    local nbd_dev
+  local rc
+  local nbd_dev
 
-    if ! [ -d /sys/module/nbd ]; then
-      ocf_log debug "nbd module is not loaded"
-      return $OCF_NOT_RUNNING
-    fi
+  if ! [ -d /sys/module/nbd ]; then
+    ocf_log debug "nbd module is not loaded"
+    return $OCF_NOT_RUNNING
+  fi
 
-    nbd_dev=$(get_nbd_info dev)
+  nbd_dev=$(get_nbd_info dev)
 
-    if [ -z "$nbd_dev" ]; then
-      ocf_log debug "RBD image $OCF_reskey_name is unmapped"
-      rc=$OCF_NOT_RUNNING
-    elif [ -b "$nbd_dev" ]; then
-      ocf_log debug "RBD image $OCF_reskey_name is mapped to $nbd_dev"
-      rc=$OCF_SUCCESS
-    else
-      # Device is listed, but it is not a block device
-      ocf_log err "$nbd_dev is not a block device!"
-      rc=$OCF_ERR_GENERIC
-    fi
+  if [ -z "$nbd_dev" ]; then
+    ocf_log debug "RBD image $OCF_reskey_name is unmapped"
+    rc=$OCF_NOT_RUNNING
+  elif [ -b "$nbd_dev" ]; then
+    ocf_log debug "RBD image $OCF_reskey_name is mapped to $nbd_dev"
+    rc=$OCF_SUCCESS
+  else
+    # Device is listed, but it is not a block device
+    ocf_log err "$nbd_dev is not a block device!"
+    rc=$OCF_ERR_GENERIC
+  fi
 
-    return $rc
+  return $rc
 }
 
 rbdnbd_start() {
-    local rbdnbd_opts
-    local rbd_name
+  local rbdnbd_opts
+  local rbd_name
 
-    # if resource is already running, bail out early
-    if rbdnbd_monitor; then
-      ocf_log info "Resource is already running"
-      return $OCF_SUCCESS
-    fi
-
-    # combine the map options
-    rbdnbd_opts="--conf ${OCF_RESKEY_cephconf} --nbds_max ${OCF_RESKEY_nbds_max}"
-    if [ -n "${OCF_RESKEY_user}" ]; then
-      rbdnbd_opts="$rbdnbd_opts --id ${OCF_RESKEY_user}"
-    fi
-    if ocf_is_true "${OCF_RESKEY_ro}"; then
-      rbdnbd_opts="$rbdnbd_opts --read-only"
-    fi
-    if ocf_is_true "${OCF_RESKEY_exclusive}"; then
-      rbdnbd_opts="$rbdnbd_opts --exclusive"
-    fi
-
-    # prepare the image/snapshot name
-    rbd_name="${OCF_RESKEY_pool}/${OCF_RESKEY_name}"
-    if [ -n "${OCF_RESKEY_snap}" ]; then
-      rbd_name="$rbd_name@${OCF_RESKEY_snap}"
-    fi
-
-    ocf_run rbd-nbd $rbdnbd_opts map $rbd_name || exit $OCF_ERR_GENERIC
-
-    # After the resource has been started, check whether it started up
-    # correctly. If the resource starts asynchronously, the agent may
-    # spin on the monitor function here -- if the resource does not
-    # start up within the defined timeout, the cluster manager will
-    # consider the start action failed
-    while ! rbdnbd_monitor; do
-      ocf_log debug "Resource has not started yet, waiting"
-      sleep 2
-    done
-
-    # only return $OCF_SUCCESS if _everything_ succeeded as expected
+  # if resource is already running, bail out early
+  if rbdnbd_monitor; then
+    ocf_log info "Resource is already running"
     return $OCF_SUCCESS
+  fi
+
+  # combine the map options
+  rbdnbd_opts="--conf ${OCF_RESKEY_cephconf} --nbds_max ${OCF_RESKEY_nbds_max}"
+  if [ -n "${OCF_RESKEY_user}" ]; then
+    rbdnbd_opts="$rbdnbd_opts --id ${OCF_RESKEY_user}"
+  fi
+  if ocf_is_true "${OCF_RESKEY_ro}"; then
+    rbdnbd_opts="$rbdnbd_opts --read-only"
+  fi
+  if ocf_is_true "${OCF_RESKEY_exclusive}"; then
+    rbdnbd_opts="$rbdnbd_opts --exclusive"
+  fi
+
+  # prepare the image/snapshot name
+  rbd_name="${OCF_RESKEY_pool}/${OCF_RESKEY_name}"
+  if [ -n "${OCF_RESKEY_snap}" ]; then
+    rbd_name="$rbd_name@${OCF_RESKEY_snap}"
+  fi
+
+  ocf_run rbd-nbd $rbdnbd_opts map $rbd_name || exit $OCF_ERR_GENERIC
+
+  # After the resource has been started, check whether it started up
+  # correctly. If the resource starts asynchronously, the agent may
+  # spin on the monitor function here -- if the resource does not
+  # start up within the defined timeout, the cluster manager will
+  # consider the start action failed
+  while ! rbdnbd_monitor; do
+    ocf_log debug "Resource has not started yet, waiting"
+    sleep 2
+  done
+
+  # udev rules should create a friendly name like
+  # /dev/rbd-nbd/rbd/test@snap, wait for it
+  while :; do
+    ls /dev/rbd-nbd/${rbd_name} >/dev/null 2>&1 && break
+    ocf_log debug "Waiting for udev to create symlink /dev/rbd-nbd/${rbd_name}"
+    sleep 1
+  done
+
+  # only return $OCF_SUCCESS if _everything_ succeeded as expected
+  return $OCF_SUCCESS
 }
 
 rbdnbd_stop() {
-    local rc
-    local nbd_dev
+  local rc
+  local nbd_dev
 
-    rbdnbd_monitor
-    rc=$?
-    case "$rc" in
-      "$OCF_SUCCESS")
-        # Currently running. Normal, expected behavior.
-        ocf_log debug "Resource is currently running"
-        ;;
-      "$OCF_NOT_RUNNING")
-        # Currently not running. Nothing to do.
-        ocf_log info "Resource is already stopped"
-        return $OCF_SUCCESS
-        ;;
-    esac
+  rbdnbd_monitor
+  rc=$?
+  case "$rc" in
+    "$OCF_SUCCESS")
+      # Currently running. Normal, expected behavior.
+      ocf_log debug "Resource is currently running"
+      ;;
+    "$OCF_NOT_RUNNING")
+      # Currently not running. Nothing to do.
+      ocf_log info "Resource is already stopped"
+      return $OCF_SUCCESS
+      ;;
+  esac
 
-    # After the resource has been stopped, check whether it shut down
-    # correctly. If the resource stops asynchronously, the agent may
-    # spin on the monitor function here -- if the resource does not
-    # shut down within the defined timeout, the cluster manager will
-    # consider the stop action failed
-    while rbdnbd_monitor; do
-      nbd_dev=$(get_nbd_info dev)
-      rbd-nbd unmap $nbd_dev
-      ocf_log debug "Resource has not stopped yet, waiting"
-      sleep 2
-    done
+  # After the resource has been stopped, check whether it shut down
+  # correctly. If the resource stops asynchronously, the agent may
+  # spin on the monitor function here -- if the resource does not
+  # shut down within the defined timeout, the cluster manager will
+  # consider the stop action failed
+  while rbdnbd_monitor; do
+    nbd_dev=$(get_nbd_info dev)
+    rbd-nbd unmap $nbd_dev
+    ocf_log debug "Resource has not stopped yet, waiting"
+    sleep 2
+  done
 
-    # only return $OCF_SUCCESS if _everything_ succeeded as expected
-    return $OCF_SUCCESS
+  # only return $OCF_SUCCESS if _everything_ succeeded as expected
+  return $OCF_SUCCESS
 
 }
 
