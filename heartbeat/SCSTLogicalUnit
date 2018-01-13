@@ -2,13 +2,13 @@
 #
 # SCSTLogicalUnit
 #
-# Description:  Resource Agent for highly available SCSTLogicalUnits.
-#               Requires installed SCST kernel module, utilities and
-#               a running SCST target.
+# Description: Resource Agent for highly available SCSTLogicalUnits.
+#              Requires installed SCST kernel module, utilities and
+#              a running SCST target.
 #
-# Author:       Andreas Kurz
+# Author:      Andreas Kurz
 #
-# License:      GNU General Public License (GPL)
+# License:     GNU General Public License (GPL)
 #
 # (c) 2015-2018 Andreas Kurz <andreas.kurz AT gmail DOT com>
 #
@@ -98,13 +98,12 @@ else
     STANDBY="nonoptimized"
 fi
 
-
 # Lockfile, for LUs starting in parallel
 LOCKFILE=${HA_RSCTMP}/SCSTLogicalUnit.lock
 #######################################################################
 
 meta_data() {
-	cat <<END
+    cat <<END
 <?xml version="1.0"?>
 <!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
 <resource-agent name="SCSTLogicalUnit" version="0.5.0">
@@ -235,7 +234,7 @@ to this lun.</shortdesc>
 <parameter name="alua_tpg" required="0" unique="0">
 <longdesc lang="en">
 White-space separated list of SCST Asymmetric Logical Unit Assignment
- (ALUA) target port group names. These names must match the cluster
+(ALUA) target port group names. These names must match the cluster
 node names. The most left one has highest priority.
 
 SCSI-4 ALUA is a multipathing method that allows each target port to
@@ -276,19 +275,19 @@ LSI/Avago Synchro CS controllers.
 </parameters>
 
 <actions>
-<action name="start"        timeout="60" />
-<action name="stop"         timeout="60" />
-<action name="promote"      timeout="60" />
-<action name="demote"       timeout="300" />
-<action name="notify"       timeout="60" />
-<action name="stop"         timeout="300" />
-<action name="monitor"      depth="0" timeout="20" interval="10" />
-<action name="monitor"      depth="0" timeout="20" interval="20" role="Slave" />
-<action name="monitor"      depth="0" timeout="20" interval="10" role="Master" />
-<action name="reload"       timeout="10" />
-<action name="status"       timeout="10" interval="10" depth="0" />
-<action name="meta-data"    timeout="5" />
-<action name="validate-all" timeout="10" />
+<action name="start"        timeout="60"/>
+<action name="stop"         timeout="60"/>
+<action name="promote"      timeout="60"/>
+<action name="demote"       timeout="300"/>
+<action name="notify"       timeout="60"/>
+<action name="stop"         timeout="300"/>
+<action name="monitor"      depth="0" timeout="20" interval="10"/>
+<action name="monitor"      depth="0" timeout="20" interval="20" role="Slave"/>
+<action name="monitor"      depth="0" timeout="20" interval="10" role="Master"/>
+<action name="reload"       timeout="10"/>
+<action name="status"       timeout="10" interval="10" depth="0"/>
+<action name="meta-data"    timeout="5"/>
+<action name="validate-all" timeout="10"/>
 </actions>
 </resource-agent>
 END
@@ -297,10 +296,10 @@ END
 #######################################################################
 
 SCSTLogicalUnit_usage() {
-	cat <<END
-usage: $0 {start|stop|promote|demote|notify|status|monitor|reload|validate-all|meta-data}
+    cat <<END
+    usage: $0 {start|stop|promote|demote|notify|status|monitor|reload|validate-all|meta-data}
 
-Expects to have a fully populated OCF RA-compliant environment set.
+    Expects to have a fully populated OCF RA-compliant environment set.
 END
 }
 
@@ -313,7 +312,7 @@ scst_sysfs_read() {
         if val="$(LC_ALL=C cat "$1" 2>&1)"; then
             echo -n "${val%\[key\]}"
             return 0
-	elif [ "${val/*: }" != "$EAGAIN" ]; then
+        elif [ "${val/*: }" != "$EAGAIN" ]; then
             return 1
         fi
         sleep 1
@@ -417,15 +416,15 @@ update_alua_access_state() {
     # If desired state is already set, don't block/unblock the device
     if [ "$(scst_sysfs_read ${dev_group}/target_groups/${tpg}/state)" != ${2} ]; then
         block_dev
-	# see scst/README: Change the ALUA state to "transitioning". At this moment all open
-	# file handles will be closed.
+        # see scst/README: Change the ALUA state to "transitioning". At this moment all open
+        # file handles will be closed.
         scst_sysfs_write "transitioning" ${dev_group}/target_groups/${tpg}/state || {
             ocf_log err "ALUA - Unable to set state to transitioning - TPG ${tpg}, device_group ${OCF_RESOURCE_INSTANCE}.";
             exit $OCF_ERR_GENERIC
         }
-	# Be sure all in-flight data is flushed ...
+        # Be sure all in-flight data is flushed ...
         flushbufs
-	# ... before switching to desired state
+        # ... before switching to desired state
         scst_sysfs_write "${2}" ${dev_group}/target_groups/${tpg}/state || {
             ocf_log err "ALUA - Unable to set state to ${2} - TPG ${tpg}, device_group ${OCF_RESOURCE_INSTANCE}.";
             exit $OCF_ERR_GENERIC
@@ -469,7 +468,7 @@ update_master_score() {
     fi
 
     # If there is a connectivity-check writing one (or more)
-    # attribute(s) like "#SCSTiscsi-netX" this is also evaluated.
+    # attribute(s) like "ALUA_SCSTiscsi-netX" this is also evaluated.
     # The value must be higher than 0 after summing up the
     # values from all transient attributes found.
     if [ -n "${connectivity}" ] && [ $connectivity -le 0 ]; then
@@ -482,9 +481,9 @@ update_master_score() {
 
     ocf_log debug "Setting master score to $score"
     if [ $score -gt 0 ]; then
-	set_master_score $score
+        set_master_score $score
     else
-	remove_master_score
+        remove_master_score
     fi
 }
 
@@ -541,8 +540,8 @@ SCSTLogicalUnit_acls() {
                         scst_sysfs_write "add ${initiator}" ${ini_path}/${initiator}/initiators/mgmt || {
                             ocf_log err "Unable to add initiator ${initiator} to group ${initiator} for target ${target}.";
                             exit $OCF_ERR_GENERIC
-                        }
-                        ocf_log debug "${OCF_RESOURCE_INSTANCE}: Allowed initiator ${initiator} to group ${initiator} for target ${target}."
+                    }
+                    ocf_log debug "${OCF_RESOURCE_INSTANCE}: Allowed initiator ${initiator} to group ${initiator} for target ${target}."
                     fi
                     # delete all other initiators
                     for index in $(ls -1 ${ini_path}/${initiator}/initiators 2>/dev/null | grep -Ev "^(mgmt|${initiator})$" | tr '\n' ' '); do
@@ -575,11 +574,12 @@ SCSTLogicalUnit_acls() {
                     export_full_path="${ini_path}/${initiator}/luns/${OCF_RESKEY_lun}"
                     for index in "${!exports_del[@]}"; do
                         if [ "${exports_del[$index]}" = "$export_full_path" ]; then
-                        unset exports_del[$index]
+                            unset exports_del[$index]
                             break
                         fi
                     done
                 done
+
                 # Remove exports for the current LU, that are not allowed.
                 ocf_log debug "Cleanup acls for LUN ${OCF_RESKEY_lun}, target ${target} ini_group ${OCF_RESOURCE_INSTANCE}."
                 for exports in "${exports_del[@]}"; do
@@ -592,7 +592,7 @@ SCSTLogicalUnit_acls() {
                         ocf_log debug "Unexported LUN ${OCF_RESKEY_lun} - ${exports}"
                     fi
                 done
-            ;;
+                ;;
             stop)
                 # Clear the acls on stop of the lun.
                 ocf_log debug "Remove all exports for LUN ${OCF_RESKEY_lun}, target ${target}."
@@ -602,15 +602,16 @@ SCSTLogicalUnit_acls() {
                             ocf_log err "Unable to unexport LUN ${OCF_RESKEY_lun} - ${exports}";
                             exit $OCF_ERR_GENERIC
                         }
-                    ocf_log debug "${OCF_RESOURCE_INSTANCE}: Unexported LUN ${OCF_RESKEY_lun} - ${exports}"
+                        ocf_log debug "${OCF_RESOURCE_INSTANCE}: Unexported LUN ${OCF_RESKEY_lun} - ${exports}"
                     fi
                 done
-            ;;
+                ;;
         esac
+
         # remove empty (or only exporting lun 0) ini_groups
         for initiator in $(find ${FABRIC_BASE}/${target}/ini_groups/ -mindepth 1 -maxdepth 1 -type d) ; do
             if [ $(find ${initiator}/luns -mindepth 1 -maxdepth 1 -type d ! -name '0' | wc -l) -eq 0 ] ; then
-		# Unexport LUN0 to prevent reconnects that would block ini_group deletion later.
+                # Unexport LUN0 to prevent reconnects that would block ini_group deletion later.
                 if [ -d "${initiator}/luns/0" ]; then
                     scst_sysfs_write "del 0" ${initiator}/luns/mgmt || {
                         ocf_log err "Unable to unexport LUN 0 - ${initiator}";
@@ -620,25 +621,25 @@ SCSTLogicalUnit_acls() {
                 fi
                 # Loop until all connections have been closed
                 while [ -d ${FABRIC_BASE}/${target}/sessions/${initiator##*/} ]; do
-		    # Forcefully close all sessions - this is async
-		    # When using iSCSI MPIO, several sessions per initiator can be available.
-		    for session in $(ls -1d ${FABRIC_BASE}/${target}/sessions/${initiator##*/} \
-				   ${FABRIC_BASE}/${target}/sessions/${initiator##*/}_* 2>/dev/null) ; do
-			scst_sysfs_write "1" "${session}/force_close" && \
-			ocf_log warn "Forcefully closed session from initiator ${initiator##*/}."
-		    done
-                    # Give it some time to close
-                    sleep 0.$(ocf_maybe_random)
-		done
+                    # Forcefully close all sessions - this is async
+                    # When using iSCSI MPIO, several sessions per initiator can be available.
+                    for session in $(ls -1d ${FABRIC_BASE}/${target}/sessions/${initiator##*/} \
+                        ${FABRIC_BASE}/${target}/sessions/${initiator##*/}_* 2>/dev/null) ; do
+                    scst_sysfs_write "1" "${session}/force_close" && \
+                        ocf_log warn "Forcefully closed session from initiator ${initiator##*/}."
+                done
+                # Give it some time to close
+                sleep 0.$(ocf_maybe_random)
+                done
                 # Delete the ini_group
                 if [ -d "${initiator}" ]; then
                     scst_sysfs_write "del ${initiator##*/}" ${FABRIC_BASE}/${target}/ini_groups/mgmt || {
-                         ocf_log err "Unable to delete initiator group ${initiator##*/} from target ${target}.";
-                         exit $OCF_ERR_GENERIC
+                        ocf_log err "Unable to delete initiator group ${initiator##*/} from target ${target}.";
+                        exit $OCF_ERR_GENERIC
                     }
-                ocf_log info "${OCF_RESOURCE_INSTANCE}: Deleted empty initiator group ${initiator##*/} from target ${target}."
-		fi
-           fi
+                    ocf_log info "${OCF_RESOURCE_INSTANCE}: Deleted empty initiator group ${initiator##*/} from target ${target}."
+                fi
+            fi
         done
     done
 
@@ -667,9 +668,10 @@ SCSTLogicalUnit_start() {
     local tpg_base
 
     case $OCF_RESKEY_fabric in
-        iscsi)    tpg_base=10001 ;;
+        iscsi)      tpg_base=10001 ;;
         qla2x00t) tpg_base=20001 ;;
     esac
+
     handler_path="${SCST_BASE}/handlers/${OCF_RESKEY_device_handler}"
     dev_path="${handler_path}/${OCF_RESOURCE_INSTANCE}"
 
@@ -806,8 +808,7 @@ SCSTLogicalUnit_start() {
                 for target in "${local_targets[@]}"; do
                     # We need a unique rel_tgt_id for every port in the TPG,
                     # also for multiple ports per node.
-                    rel_tgt_id=$(( ($(get_index ${tpg} "${tpgs[*]}") * 1000 ) + \
-                                   ($(get_index ${target} "${local_targets[*]}") + ${tpg_base} ) ))
+                    rel_tgt_id=$(( ($(get_index ${tpg} "${tpgs[*]}") * 1000 ) + ($(get_index ${target} "${local_targets[*]}") + ${tpg_base} ) ))
                     if [ -d "${dev_group}/target_groups/${tpg}" ]; then
                         if [ ! -e "${dev_group}/target_groups/${tpg}/${target}" ]; then
                             scst_sysfs_write "add ${target}" ${dev_group}/target_groups/${tpg}/mgmt || {
@@ -824,7 +825,7 @@ SCSTLogicalUnit_start() {
                             }
                             ocf_log debug "${OCF_RESOURCE_INSTANCE}: Set rel_tgt_id ${rel_tgt_id} for target ${target} - TPG ${tpg}, device_group ${OCF_RESOURCE_INSTANCE}."
                         fi
-                   fi
+                    fi
                 done
             fi
         done
@@ -842,9 +843,9 @@ SCSTLogicalUnit_start() {
 
 SCSTLogicalUnit_reload() {
     case $OCF_RESKEY_fabric in
-	iscsi|qla2x00t)
+        iscsi|qla2x00t)
             SCSTLogicalUnit_start
-	    ;;
+            ;;
     esac
 
     return $OCF_SUCCESS
@@ -955,7 +956,7 @@ SCSTLogicalUnit_monitor() {
                 *)
                     return $OCF_FAILED_MASTER
                     ;;
-           esac
+            esac
         fi
         return $OCF_SUCCESS
     fi
@@ -1068,7 +1069,7 @@ SCSTLogicalUnit_notify() {
                     # set to active (without luns) on this node.
                     # We rely on default standby state on creation.
                     for instance in $master; do
-                         update_alua_access_state $instance active
+                        update_alua_access_state $instance active
                     done
                 else
                     # Be sure to set correct slave mode
@@ -1106,11 +1107,11 @@ SCSTLogicalUnit_notify() {
 SCSTLogicalUnit_validate() {
     # Do we have all required variables?
     for var in target_id lun path; do
-	param="OCF_RESKEY_${var}"
-	if [ -z "${!param}" ]; then
-	    ocf_log error "Missing resource parameter \"$var\"!"
-	    exit $OCF_ERR_CONFIGURED
-	fi
+        param="OCF_RESKEY_${var}"
+        if [ -z "${!param}" ]; then
+            ocf_log error "Missing resource parameter \"$var\"!"
+            exit $OCF_ERR_CONFIGURED
+        fi
     done
 
     # Do we have a valid LUN?
@@ -1132,13 +1133,13 @@ SCSTLogicalUnit_validate() {
 
     # Is the configured fabric supported?
     case "$OCF_RESKEY_fabric" in
-	iscsi|qla2x00t)
+        iscsi|qla2x00t)
             :
-	    ;;
-	*)
-	    ocf_log error "Unsupported SCST target fabric \"$OCF_RESKEY_fabric\"!"
-	    exit $OCF_ERR_CONFIGURED
-	    ;;
+            ;;
+        *)
+            ocf_log error "Unsupported SCST target fabric \"$OCF_RESKEY_fabric\"!"
+            exit $OCF_ERR_CONFIGURED
+            ;;
     esac
 
     # Do we have any configuration parameters that the current
@@ -1147,23 +1148,23 @@ SCSTLogicalUnit_validate() {
     local var
     local envar
     case $OCF_RESKEY_fabric in
-	iscsi|qla2x00t)
-	    unsupported_params=""
-	    ;;
+        iscsi|qla2x00t)
+            unsupported_params=""
+            ;;
     esac
     for var in ${unsupported_params}; do
-	envar=OCF_RESKEY_${var}
-	defvar=OCF_RESKEY_${var}_default
-	if [ -n "${!envar}" ]; then
-	    if  [[ "${!envar}" != "${!defvar}" ]];then
-		case "$__OCF_ACTION" in
+        envar=OCF_RESKEY_${var}
+        defvar=OCF_RESKEY_${var}_default
+        if [ -n "${!envar}" ]; then
+            if  [[ "${!envar}" != "${!defvar}" ]];then
+                case "$__OCF_ACTION" in
                     start|validate-all)
-                      ocf_log warn "Configuration parameter \"${var}\"" \
-                       "is not supported by SCST's ${OCF_RESKEY_fabric} fabric" \
-                       "and will be ignored." ;;
-		esac
-	    fi
-	fi
+                        ocf_log warn "Configuration parameter \"${var}\"" \
+                            "is not supported by SCST's ${OCF_RESKEY_fabric} fabric" \
+                            "and will be ignored." ;;
+                esac
+            fi
+        fi
     done
 
     # Do we have all required binaries?
@@ -1182,34 +1183,33 @@ SCSTLogicalUnit_validate() {
 
     if ! ocf_is_probe; then
         # Is the required kernel functionality available?
-	case $OCF_RESKEY_fabric in
-	    iscsi|qla2x00t)
-		[ -d "${FABRIC_BASE}" ] || {
-		    ocf_log err "${FABRIC_BASE} does not exist or is not a directory -- check if required modules are loaded.";
-		    exit $OCF_ERR_INSTALLED
+        case $OCF_RESKEY_fabric in
+            iscsi|qla2x00t)
+                [ -d "${FABRIC_BASE}" ] || {
+                    ocf_log err "${FABRIC_BASE} does not exist or is not a directory -- check if required modules are loaded.";
+                    exit $OCF_ERR_INSTALLED
                 }
-		;;
-	esac
+                ;;
+        esac
 
-	[ -d "${SCST_BASE}/handlers/${OCF_RESKEY_device_handler}" ] || {
-	    ocf_log err "${OCF_RESKEY_device_handler} handler does not exist or is not a directory -- check if required modules are loaded.";
-	    exit $OCF_ERR_INSTALLED
+        [ -d "${SCST_BASE}/handlers/${OCF_RESKEY_device_handler}" ] || {
+            ocf_log err "${OCF_RESKEY_device_handler} handler does not exist or is not a directory -- check if required modules are loaded.";
+            exit $OCF_ERR_INSTALLED
         }
     fi
 
     return $OCF_SUCCESS
 }
 
-
 case $1 in
-  meta-data)
-	meta_data
-	exit $OCF_SUCCESS
-	;;
-  usage|help)
-	SCSTLogicalUnit_usage
-	exit $OCF_SUCCESS
-	;;
+    meta-data)
+        meta_data
+        exit $OCF_SUCCESS
+        ;;
+    usage|help)
+        SCSTLogicalUnit_usage
+        exit $OCF_SUCCESS
+        ;;
 esac
 
 if $USE_DEBUG_LOG ; then
@@ -1248,8 +1248,10 @@ case $__OCF_ACTION in
     *)
         SCSTLogicalUnit_usage
         exit $OCF_ERR_UNIMPLEMENTED
-	;;
+        ;;
 esac
 rc=$?
 ocf_log debug "${OCF_RESOURCE_INSTANCE} $__OCF_ACTION : $rc"
 exit $rc
+
+# vi:sw=4:ts=4:et:
