@@ -10,7 +10,7 @@
 #
 # License:      GNU General Public License (GPL)
 #
-# (c) 2015-2017 Andreas Kurz <andreas.kurz AT gmail DOT com>
+# (c) 2015-2018 Andreas Kurz <andreas.kurz AT gmail DOT com>
 #
 # This resource agent is derived from the iSCSITarget resource
 # agent, which itself is made available to the public under the
