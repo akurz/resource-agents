@@ -20,12 +20,14 @@
 
 # Defaults
 OCF_RESKEY_cephconf_default="/etc/ceph/ceph.conf"
+OCF_RESKEY_cluster_default="ceph"
 OCF_RESKEY_exclusive_default="false"
 OCF_RESKEY_nbds_max_default="256"
 OCF_RESKEY_pool_default="rbd"
 OCF_RESKEY_ro_default="false"
 
 : ${OCF_RESKEY_cephconf=${OCF_RESKEY_cephconf_default}}
+: ${OCF_RESKEY_cluster=${OCF_RESKEY_cluster_default}}
 : ${OCF_RESKEY_exclusive=${OCF_RESKEY_exclusive_default}}
 : ${OCF_RESKEY_nbds_max=${OCF_RESKEY_nbds_max_default}}
 : ${OCF_RESKEY_pool=${OCF_RESKEY_pool_default}}
@@ -76,6 +78,14 @@ Location of the Ceph configuration file.
 </longdesc>
 <shortdesc lang="en">Ceph configuration file</shortdesc>
 <content type="string" default="${OCF_RESKEY_cephconf_default}"/>
+</parameter>
+
+<parameter name="cluster" unique="0" required="0">
+<longdesc lang="en">
+The Ceph cluster name.
+</longdesc>
+<shortdesc lang="en">Ceph cluster name</shortdesc>
+<content type="string" default="${OCF_RESKEY_cluster_default}"/>
 </parameter>
 
 <parameter name="user" unique="0" required="0">
@@ -192,7 +202,7 @@ rbdnbd_start() {
   fi
 
   # combine the map options
-  rbdnbd_opts="--conf ${OCF_RESKEY_cephconf} --nbds_max ${OCF_RESKEY_nbds_max}"
+  rbdnbd_opts="--cluster ${OCF_RESKEY_cluster} --conf ${OCF_RESKEY_cephconf} --nbds_max ${OCF_RESKEY_nbds_max}"
   if [ -n "${OCF_RESKEY_user}" ]; then
     rbdnbd_opts="$rbdnbd_opts --id ${OCF_RESKEY_user}"
   fi
