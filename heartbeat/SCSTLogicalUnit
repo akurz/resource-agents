@@ -87,7 +87,7 @@ SCST_BASE="/sys/kernel/scst_tgt"
 FABRIC_BASE="${SCST_BASE}/targets/${OCF_RESKEY_fabric}"
 CRM_ATTR_GET_TGT="${HA_SBIN_DIR}/crm_attribute --quiet --query --name local_${OCF_RESKEY_fabric}_targets --node"
 CIB_XPATH_CONNECTIVITY="${HA_SBIN_DIR}/cibadmin --query --local --xpath \
-    //node_state[@uname=\"${HOSTNAME}\"]/transient_attributes//nvpair[starts-with(@name,\"#SCST${OCF_RESKEY_fabric}\")]"
+    //node_state[@uname=\"${HOSTNAME}\"]/transient_attributes//nvpair[starts-with(@name,\"ALUA_SCST${OCF_RESKEY_fabric}\")]"
 STORCLI="${OCF_RESKEY_storcli_binary_path}"
 
 # Forwarding targets are currently only supported
@@ -243,7 +243,7 @@ manage access states and path attributes using an explict method, or
 implicitly using target-side configFS operations.
 
 If at least one node-attribute is found with a name starting with
-"#SCST${OCF_RESKEY_fabric_default}" (e.g. for the default "iscsi" fabric),
+"ALUA_SCST${OCF_RESKEY_fabric_default}" (e.g. for the default "iscsi" fabric),
 it is also used to calculate the ALUA state. The sum of all attribute
 values has to be higher than 0 to switch to "active" state. You can use
 a common connectivity-check resource like "ping" to write such a node-attribute.
