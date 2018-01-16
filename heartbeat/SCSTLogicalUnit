@@ -917,10 +917,21 @@ SCSTLogicalUnit_monitor() {
     }
 
     # If our device is not configured we're not running
-    [ -e ${dev_path} ] || {
-        ocf_log debug "Device ${OCF_RESOURCE_INSTANCE} of type ${OCF_RESKEY_device_handler} not available - Assuming LU ${OCF_RESOURCE_INSTANCE} is not up.";
-        return $OCF_NOT_RUNNING
-    }
+    # - in the special case of a demote due to reconfiguration
+    # of the device_handler we accept any handler.
+    # Feature or bug? For demote the new parameters are sent
+    # instead of the current ones (like for stop action)
+    if [ "$__OCF_ACTION" != "demote" ] ; then
+       [ -e ${dev_path} ] || {
+            ocf_log debug "Device ${OCF_RESOURCE_INSTANCE} of type ${OCF_RESKEY_device_handler} not available - Assuming LU ${OCF_RESOURCE_INSTANCE} is not up.";
+            return $OCF_NOT_RUNNING
+       }
+    else
+       [ -e ${SCST_BASE}/handlers/*/${OCF_RESOURCE_INSTANCE} ] || {
+            ocf_log debug "Device ${OCF_RESOURCE_INSTANCE} of any type not available - Assuming LU ${OCF_RESOURCE_INSTANCE} is not up.";
+            return $OCF_NOT_RUNNING
+        }
+    fi
 
     # Check all targets
     for target in ${OCF_RESKEY_target_id}; do
@@ -1140,6 +1151,17 @@ SCSTLogicalUnit_validate() {
             ocf_log error "Unsupported SCST target fabric \"$OCF_RESKEY_fabric\"!"
             exit $OCF_ERR_CONFIGURED
             ;;
+    esac
+
+    # Is the device handler supported?
+    case "$OCF_RESKEY_device_handler" in
+       vdisk_fileio|vdisk_blockio|vcdrom|vdisk_nullio)
+           :
+           ;;
+       *)
+           ocf_log error "Unsupported SCST device handler \"$OCF_RESKEY_fabric\"!"
+           exit $OCF_ERR_CONFIGURED
+           ;;
     esac
 
     # Do we have any configuration parameters that the current
